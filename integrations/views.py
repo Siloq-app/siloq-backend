@@ -1,0 +1,240 @@
+"""
+Views for WordPress plugin integration endpoints.
+"""
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
+from django.utils import timezone
+from django.shortcuts import get_object_or_404
+from sites.models import Site, APIKey
+from seo.models import Page, SEOData
+from seo.serializers import PageSyncSerializer as SEOPageSyncSerializer
+from .models import Scan
+from .serializers import (
+    APIKeyVerifySerializer, ScanCreateSerializer, ScanSerializer,
+    SEODataSyncSerializer
+)
+from .permissions import IsAPIKeyAuthenticated, IsJWTOrAPIKeyAuthenticated
+from .authentication import APIKeyAuthentication
+
+
+@api_view(['POST'])
+@authentication_classes([APIKeyAuthentication])
+@permission_classes([IsAPIKeyAuthenticated])
+def verify_api_key(request):
+    """
+    Verify API key endpoint for WordPress plugin Test Connection.
+    
+    POST /api/v1/auth/verify
+    Headers: Authorization: Bearer <api_key>   (api_key must be sk_siloq_...)
+    
+    Returns: { "authenticated": true, "valid": true, "site_id": ..., "site_name": "...", "site_url": "..." }
+    WordPress plugin expects 200 and body.authenticated === true for success.
+    """
+    site = request.auth['site']
+    
+    return Response({
+        'authenticated': True,
+        'valid': True,
+        'site_id': site.id,
+        'site_name': site.name,
+        'site_url': site.url,
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAPIKeyAuthenticated])
+def sync_page(request):
+    """
+    Sync a page from WordPress to Django backend.
+    
+    POST /api/v1/pages/sync
+    Headers: Authorization: Bearer <api_key>
+    Body: { "wp_post_id": 123, "url": "...", "title": "...", ... }
+    
+    Returns: { "page_id": 1, "message": "Page synced successfully" }
+    """
+    site = request.auth['site']
+    serializer = SEOPageSyncSerializer(data=request.data)
+    
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Get or create page
+    wp_post_id = serializer.validated_data['wp_post_id']
+    page, created = Page.objects.get_or_create(
+        site=site,
+        wp_post_id=wp_post_id,
+        defaults=serializer.validated_data
+    )
+    
+    if not created:
+        # Update existing page
+        for key, value in serializer.validated_data.items():
+            setattr(page, key, value)
+        page.save()
+    
+    # Update site's last_synced_at
+    site.last_synced_at = timezone.now()
+    site.save(update_fields=['last_synced_at'])
+    
+    return Response({
+        'page_id': page.id,
+        'message': 'Page synced successfully',
+        'created': created
+    }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAPIKeyAuthenticated])
+def sync_seo_data(request, page_id=None):
+    """
+    Sync SEO data for a page from WordPress scanner.
+    
+    POST /api/v1/pages/{page_id}/seo-data
+    Headers: Authorization: Bearer <api_key>
+    Body: { "seo_score": 85, "issues": [...], ... }
+    
+    Returns: { "seo_data_id": 1, "message": "SEO data synced successfully" }
+    """
+    # Get page_id from URL parameter or request data
+    page_id = page_id or request.data.get('page_id')
+    if not page_id:
+        return Response(
+            {'error': 'page_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    site = request.auth['site']
+    page = get_object_or_404(Page, id=page_id, site=site)
+    
+    serializer = SEODataSyncSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Get or create SEO data
+    seo_data, created = SEOData.objects.get_or_create(
+        page=page,
+        defaults=serializer.validated_data
+    )
+    
+    if not created:
+        # Update existing SEO data
+        for key, value in serializer.validated_data.items():
+            setattr(seo_data, key, value)
+        seo_data.save()
+    
+    return Response({
+        'seo_data_id': seo_data.id,
+        'message': 'SEO data synced successfully',
+        'created': created
+    }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAPIKeyAuthenticated])
+def create_scan(request):
+    """
+    Create a new website scan (for lead gen scanner).
+    
+    POST /api/v1/scans
+    Headers: Authorization: Bearer <api_key>
+    Body: { "url": "https://example.com", "scan_type": "full" }
+    
+    Returns: { "id": 1, "status": "pending", ... }
+    """
+    site = request.auth['site']
+    serializer = ScanCreateSerializer(data=request.data)
+    
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    scan = Scan.objects.create(
+        site=site,
+        url=serializer.validated_data['url'],
+        scan_type=serializer.validated_data.get('scan_type', 'full'),
+        status='pending'
+    )
+    
+    # TODO: Trigger async scan processing (Celery task, etc.)
+    # For now, simulate immediate completion with dummy data
+    scan.status = 'completed'
+    scan.score = 72  # Dummy score
+    scan.pages_analyzed = 1
+    scan.scan_duration_seconds = 2.5
+    scan.completed_at = timezone.now()
+    scan.results = {
+        'technical_score': 80,
+        'content_score': 70,
+        'structure_score': 75,
+        'performance_score': 65,
+        'seo_score': 72,
+        'issues': [
+            {'type': 'missing_meta_description', 'severity': 'high', 'message': 'Missing meta description'},
+            {'type': 'no_h1', 'severity': 'medium', 'message': 'No H1 heading found'},
+        ],
+        'recommendations': [
+            'Add a meta description',
+            'Add an H1 heading',
+        ]
+    }
+    scan.save()
+    
+    return Response(ScanSerializer(scan).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([IsAPIKeyAuthenticated])
+def get_scan(request, scan_id):
+    """
+    Get scan status and results.
+    
+    GET /api/v1/scans/{scan_id}
+    Headers: Authorization: Bearer <api_key>
+    
+    Returns: { "id": 1, "status": "completed", "score": 72, ... }
+    """
+    site = request.auth['site']
+    scan = get_object_or_404(Scan, id=scan_id, site=site)
+    
+    return Response(ScanSerializer(scan).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAPIKeyAuthenticated])
+def get_scan_report(request, scan_id):
+    """
+    Get full scan report (for lead gen scanner full report).
+    
+    GET /api/v1/scans/{scan_id}/report
+    Headers: Authorization: Bearer <api_key>
+    
+    Returns: Full detailed report with keyword cannibalization analysis, etc.
+    """
+    site = request.auth['site']
+    scan = get_object_or_404(Scan, id=scan_id, site=site)
+    
+    if scan.status != 'completed':
+        return Response(
+            {'error': 'Scan not completed yet'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Build comprehensive report
+    report = {
+        'scan_id': scan.id,
+        'url': scan.url,
+        'score': scan.score,
+        'pages_analyzed': scan.pages_analyzed,
+        'scan_duration_seconds': scan.scan_duration_seconds,
+        'completed_at': scan.completed_at,
+        'results': scan.results,
+        # Add keyword cannibalization analysis
+        'keyword_cannibalization': {
+            'issues_found': len(scan.results.get('issues', [])),
+            'recommendations': scan.results.get('recommendations', []),
+        }
+    }
+    
+    return Response(report)

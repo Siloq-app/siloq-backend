@@ -81,13 +81,13 @@ WSGI_APPLICATION = 'siloq_backend.wsgi.application'
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "siloq_db",
-        "USER": "doadmin",
-        "PASSWORD": "AVNS_R7uXEHjow6n1MlLZ8Zm",
-        "HOST": "db-siloq-postgres-do-user-31099676-0.k.db.ondigitalocean.com",
-        "PORT": "25060",
+        "NAME": os.getenv("DB_NAME", "siloq_db"),
+        "USER": os.getenv("DB_USER", "postgres"),
+        "PASSWORD": os.getenv("DB_PASSWORD", ""),
+        "HOST": os.getenv("DB_HOST", "localhost"),
+        "PORT": os.getenv("DB_PORT", "5432"),
         "OPTIONS": {
-            "sslmode": "require",
+            "sslmode": os.getenv("DB_SSLMODE", "prefer"),
         },
     }
 }

@@ -7,10 +7,12 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from the project root (siloq-backend), so it works when run from repo root or from siloq-backend
+_project_root = Path(__file__).resolve().parent.parent
+load_dotenv(_project_root / ".env")
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = _project_root
 
 
 # Quick-start development settings - unsuitable for production
@@ -20,9 +22,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-this-in-production')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,host.docker.internal').split(',')
+# Comma-separated list; on DigitalOcean App Platform you can set ALLOWED_HOSTS or APP_DOMAIN (DO sets APP_DOMAIN automatically)
+_default_hosts = 'localhost,127.0.0.1,host.docker.internal'
+_app_domain = os.getenv('APP_DOMAIN', '')
+if _app_domain:
+    _default_hosts = _default_hosts + ',' + _app_domain
+ALLOWED_HOSTS = [h.strip() for h in os.getenv('ALLOWED_HOSTS', _default_hosts).split(',') if h.strip()]
 
 
 # Application definition
@@ -45,6 +52,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -77,21 +85,27 @@ WSGI_APPLICATION = 'siloq_backend.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
+# On DigitalOcean App Platform, DATABASE_URL is set automatically when you add a database.
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": "siloq_db",
-        "USER": "doadmin",
-        "PASSWORD": "AVNS_R7uXEHjow6n1MlLZ8Zm",
-        "HOST": "db-siloq-postgres-do-user-31099676-0.k.db.ondigitalocean.com",
-        "PORT": "25060",
-        "OPTIONS": {
-            "sslmode": "require",
-        },
+import dj_database_url
+
+DATABASES = {}
+if os.getenv('DATABASE_URL'):
+    DATABASES['default'] = dj_database_url.config(
+        conn_max_age=600,
+        conn_health_checks=True,
+        ssl_require=True,
+    )
+else:
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DB_NAME', 'siloq_db'),
+        'USER': os.getenv('DB_USER', ''),
+        'PASSWORD': os.getenv('DB_PASSWORD', ''),
+        'HOST': os.getenv('DB_HOST', 'localhost'),
+        'PORT': os.getenv('DB_PORT', '5432'),
+        'OPTIONS': {'sslmode': 'require'} if os.getenv('DB_SSL') else {},
     }
-}
-
 
 # Password validation
 # https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
@@ -126,8 +140,16 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.0/howto/static-files/
-
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
@@ -168,11 +190,12 @@ SIMPLE_JWT = {
 }
 
 # CORS Settings
+# Add production origins via CORS_ALLOWED_ORIGINS_EXTRA (comma-separated), e.g. https://siloq.ai,https://dashboard.siloq.ai
+_cors_extra = os.getenv('CORS_ALLOWED_ORIGINS_EXTRA', '')
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-]
-
+] + [o.strip() for o in _cors_extra.split(',') if o.strip()]
 CORS_ALLOW_CREDENTIALS = True
 
 # Custom User Model

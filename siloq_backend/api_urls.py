@@ -4,8 +4,11 @@ All API endpoints are prefixed with /api/v1/
 """
 from django.urls import path, include
 from integrations.views import verify_api_key
+from siloq_backend.views import health_check
 
 urlpatterns = [
+    # Health check (no auth) - GET /api/v1/health/
+    path('health/', health_check),
     # Dashboard authentication
     path('auth/', include('accounts.urls')),
     # WordPress plugin: POST /api/v1/auth/verify with Bearer <api_key>

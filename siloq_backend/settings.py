@@ -180,3 +180,18 @@ CORS_ALLOW_CREDENTIALS = True
 
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.User'
+
+# Stripe Configuration
+STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY', '')
+STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
+STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')
+
+# Stripe Price IDs
+STRIPE_PRICE_PRO = os.getenv('STRIPE_PRICE_PRO', '')
+STRIPE_PRICE_BUILDER = os.getenv('STRIPE_PRICE_BUILDER', '')
+STRIPE_PRICE_ARCHITECT = os.getenv('STRIPE_PRICE_ARCHITECT', '')
+STRIPE_PRICE_EMPIRE = os.getenv('STRIPE_PRICE_EMPIRE', '')
+
+# Frontend URL for redirects
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://app.siloq.ai')
+

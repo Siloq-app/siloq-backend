@@ -1,137 +1,277 @@
 """
-Billing API views.
-Handles AI settings, usage logs, and cost estimation.
+Stripe billing views for Siloq.
+Handles checkout sessions, webhooks, and subscription management.
 """
-from rest_framework import viewsets, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
+import json
+import stripe
+from django.conf import settings
+from django.http import JsonResponse, HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
-from django.shortcuts import get_object_or_404
+from rest_framework.response import Response
 
-from sites.models import Site
-from .models import ProjectAISettings, AIUsageLog, BillingEvent
-from .serializers import (
-    ProjectAISettingsSerializer, ProjectAISettingsUpdateSerializer,
-    AIUsageLogSerializer, BillingEventSerializer, CostEstimateSerializer
-)
-from .preflight import check_ai_preflight, AIPreflightGuard
+stripe.api_key = settings.STRIPE_SECRET_KEY
+
+# Price IDs for each tier
+PRICE_IDS = {
+    'pro': settings.STRIPE_PRICE_PRO,
+    'builder': settings.STRIPE_PRICE_BUILDER,
+    'architect': settings.STRIPE_PRICE_ARCHITECT,
+    'empire': settings.STRIPE_PRICE_EMPIRE,
+}
 
 
-class BillingViewSet(viewsets.ViewSet):
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_checkout_session(request):
     """
-    Billing endpoints for a site.
+    Create a Stripe Checkout session for subscription.
     
-    GET /sites/{site_id}/billing/settings/ - Get AI settings
-    PUT /sites/{site_id}/billing/settings/ - Update AI settings
-    GET /sites/{site_id}/billing/usage/ - Get usage logs
-    POST /sites/{site_id}/billing/estimate/ - Estimate cost before execution
+    POST /api/v1/billing/checkout/
+    Body: { "tier": "pro" | "builder" | "architect" | "empire" }
     """
-    permission_classes = [IsAuthenticated]
+    tier = request.data.get('tier', '').lower()
     
-    def _get_site(self, request, site_id):
-        """Get site and verify ownership."""
-        return get_object_or_404(Site, id=site_id, user=request.user)
+    if tier not in PRICE_IDS:
+        return Response({'error': f'Invalid tier: {tier}'}, status=400)
     
-    @action(detail=False, methods=['get', 'put'], url_path='settings')
-    def settings(self, request, site_id=None):
-        """Get or update AI settings for a site."""
-        site = self._get_site(request, site_id)
+    price_id = PRICE_IDS[tier]
+    
+    try:
+        # Get or create Stripe customer
+        user = request.user
+        if not user.stripe_customer_id:
+            customer = stripe.Customer.create(
+                email=user.email,
+                metadata={'user_id': user.id}
+            )
+            user.stripe_customer_id = customer.id
+            user.save(update_fields=['stripe_customer_id'])
         
-        # Get or create settings
-        ai_settings, created = ProjectAISettings.objects.get_or_create(
-            site=site,
-            defaults={'mode': 'trial'}
+        # Create checkout session
+        session = stripe.checkout.Session.create(
+            customer=user.stripe_customer_id,
+            payment_method_types=['card'],
+            line_items=[{
+                'price': price_id,
+                'quantity': 1,
+            }],
+            mode='subscription',
+            success_url=f'{settings.FRONTEND_URL}/dashboard?session_id={{CHECKOUT_SESSION_ID}}',
+            cancel_url=f'{settings.FRONTEND_URL}/pricing?canceled=true',
+            metadata={
+                'user_id': user.id,
+                'tier': tier,
+            },
+            automatic_tax={'enabled': True},
         )
         
-        # Initialize trial if new
-        if created and not ai_settings.trial_start_date:
-            ai_settings.start_trial()
-        
-        if request.method == 'GET':
-            serializer = ProjectAISettingsSerializer(ai_settings)
-            return Response(serializer.data)
-        
-        # PUT - update settings
-        serializer = ProjectAISettingsUpdateSerializer(ai_settings, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(ProjectAISettingsSerializer(ai_settings).data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'checkout_url': session.url, 'session_id': session.id})
     
-    @action(detail=False, methods=['get'], url_path='usage')
-    def usage(self, request, site_id=None):
-        """Get AI usage logs for a site."""
-        site = self._get_site(request, site_id)
-        
-        logs = AIUsageLog.objects.filter(site=site).order_by('-created_at')[:100]
-        serializer = AIUsageLogSerializer(logs, many=True)
-        
-        # Calculate totals
-        total_tokens = sum(log.input_tokens + log.output_tokens for log in logs)
-        total_cost = sum(log.total_charge_usd for log in logs)
-        trial_cost = sum(log.provider_cost_usd for log in logs if log.is_trial)
-        
+    except stripe.error.StripeError as e:
+        return Response({'error': str(e)}, status=400)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_portal_session(request):
+    """
+    Create a Stripe Customer Portal session for managing subscription.
+    
+    POST /api/v1/billing/portal/
+    """
+    user = request.user
+    
+    if not user.stripe_customer_id:
+        return Response({'error': 'No active subscription'}, status=400)
+    
+    try:
+        session = stripe.billing_portal.Session.create(
+            customer=user.stripe_customer_id,
+            return_url=f'{settings.FRONTEND_URL}/dashboard',
+        )
+        return Response({'portal_url': session.url})
+    
+    except stripe.error.StripeError as e:
+        return Response({'error': str(e)}, status=400)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_subscription_status(request):
+    """
+    Get current subscription status for the user.
+    
+    GET /api/v1/billing/status/
+    """
+    user = request.user
+    
+    # Check if in free trial (handled in our DB, not Stripe)
+    if user.is_trial_active():
         return Response({
-            'logs': serializer.data,
-            'summary': {
-                'total_tokens': total_tokens,
-                'total_cost_usd': float(total_cost),
-                'trial_cost_absorbed_usd': float(trial_cost),
-                'log_count': len(logs)
-            }
+            'status': 'trial',
+            'tier': 'trial',
+            'trial_ends_at': user.trial_ends_at,
+            'days_remaining': user.trial_days_remaining(),
         })
     
-    @action(detail=False, methods=['post'], url_path='estimate')
-    def estimate(self, request, site_id=None):
-        """
-        Estimate cost before AI execution.
-        
-        POST /sites/{site_id}/billing/estimate/
-        Body: { "estimated_tokens": 2000, "is_bulk": false }
-        
-        Returns cost estimate or error if not allowed.
-        """
-        site = self._get_site(request, site_id)
-        
-        estimated_tokens = request.data.get('estimated_tokens', 1000)
-        is_bulk = request.data.get('is_bulk', False)
-        
-        result = check_ai_preflight(site, estimated_tokens, is_bulk)
-        
-        response_data = {
-            'allowed': result.allowed,
-            'error_code': result.error_code,
-            'error_message': result.error_message,
-            'warning': result.warning,
-            'estimated_input_tokens': result.estimated_input_tokens,
-            'estimated_output_tokens': result.estimated_output_tokens,
-            'estimated_provider_cost_usd': str(result.estimated_provider_cost_usd),
-            'estimated_siloq_fee_usd': str(result.estimated_siloq_fee_usd),
-            'estimated_total_cost_usd': str(result.estimated_total_cost_usd),
-        }
-        
-        if not result.allowed:
-            return Response(response_data, status=status.HTTP_402_PAYMENT_REQUIRED)
-        
-        return Response(response_data)
+    if not user.stripe_customer_id or not user.stripe_subscription_id:
+        return Response({
+            'status': 'inactive',
+            'tier': None,
+        })
     
-    @action(detail=False, methods=['post'], url_path='increment-trial')
-    def increment_trial(self, request, site_id=None):
-        """
-        Increment trial page counter after successful generation.
-        Called internally after content generation.
-        """
-        site = self._get_site(request, site_id)
-        
-        ai_settings = get_object_or_404(ProjectAISettings, site=site)
-        
-        if ai_settings.mode != 'trial':
-            return Response({'error': 'Not in trial mode'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        ai_settings.trial_pages_used += 1
-        ai_settings.save(update_fields=['trial_pages_used'])
+    try:
+        subscription = stripe.Subscription.retrieve(user.stripe_subscription_id)
         
         return Response({
-            'trial_pages_used': ai_settings.trial_pages_used,
-            'trial_pages_remaining': ai_settings.trial_pages_remaining
+            'status': subscription.status,
+            'tier': user.subscription_tier,
+            'current_period_end': subscription.current_period_end,
+            'cancel_at_period_end': subscription.cancel_at_period_end,
         })
+    
+    except stripe.error.StripeError as e:
+        return Response({'error': str(e)}, status=400)
+
+
+@csrf_exempt
+@require_http_methods(['POST'])
+def stripe_webhook(request):
+    """
+    Handle Stripe webhook events.
+    
+    POST /api/v1/billing/webhook/
+    """
+    payload = request.body
+    sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
+    
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
+        )
+    except ValueError:
+        return HttpResponse('Invalid payload', status=400)
+    except stripe.error.SignatureVerificationError:
+        return HttpResponse('Invalid signature', status=400)
+    
+    # Handle the event
+    if event['type'] == 'checkout.session.completed':
+        handle_checkout_completed(event['data']['object'])
+    
+    elif event['type'] == 'customer.subscription.created':
+        handle_subscription_created(event['data']['object'])
+    
+    elif event['type'] == 'customer.subscription.updated':
+        handle_subscription_updated(event['data']['object'])
+    
+    elif event['type'] == 'customer.subscription.deleted':
+        handle_subscription_deleted(event['data']['object'])
+    
+    elif event['type'] == 'invoice.paid':
+        handle_invoice_paid(event['data']['object'])
+    
+    elif event['type'] == 'invoice.payment_failed':
+        handle_payment_failed(event['data']['object'])
+    
+    return HttpResponse(status=200)
+
+
+def handle_checkout_completed(session):
+    """Handle successful checkout."""
+    from accounts.models import User
+    
+    user_id = session.get('metadata', {}).get('user_id')
+    tier = session.get('metadata', {}).get('tier')
+    subscription_id = session.get('subscription')
+    
+    if user_id:
+        try:
+            user = User.objects.get(id=user_id)
+            user.stripe_subscription_id = subscription_id
+            user.subscription_tier = tier
+            user.subscription_status = 'active'
+            user.save(update_fields=[
+                'stripe_subscription_id', 
+                'subscription_tier', 
+                'subscription_status'
+            ])
+        except User.DoesNotExist:
+            pass
+
+
+def handle_subscription_created(subscription):
+    """Handle new subscription."""
+    from accounts.models import User
+    
+    customer_id = subscription.get('customer')
+    
+    try:
+        user = User.objects.get(stripe_customer_id=customer_id)
+        user.stripe_subscription_id = subscription.get('id')
+        user.subscription_status = subscription.get('status')
+        user.save(update_fields=['stripe_subscription_id', 'subscription_status'])
+    except User.DoesNotExist:
+        pass
+
+
+def handle_subscription_updated(subscription):
+    """Handle subscription updates (upgrades, downgrades, cancellations)."""
+    from accounts.models import User
+    
+    customer_id = subscription.get('customer')
+    
+    try:
+        user = User.objects.get(stripe_customer_id=customer_id)
+        user.subscription_status = subscription.get('status')
+        
+        # Get tier from price
+        items = subscription.get('items', {}).get('data', [])
+        if items:
+            price_id = items[0].get('price', {}).get('id')
+            for tier, pid in PRICE_IDS.items():
+                if pid == price_id:
+                    user.subscription_tier = tier
+                    break
+        
+        user.save(update_fields=['subscription_status', 'subscription_tier'])
+    except User.DoesNotExist:
+        pass
+
+
+def handle_subscription_deleted(subscription):
+    """Handle subscription cancellation."""
+    from accounts.models import User
+    
+    customer_id = subscription.get('customer')
+    
+    try:
+        user = User.objects.get(stripe_customer_id=customer_id)
+        user.subscription_status = 'canceled'
+        user.subscription_tier = None
+        user.save(update_fields=['subscription_status', 'subscription_tier'])
+    except User.DoesNotExist:
+        pass
+
+
+def handle_invoice_paid(invoice):
+    """Handle successful payment."""
+    # Log payment for records
+    pass
+
+
+def handle_payment_failed(invoice):
+    """Handle failed payment."""
+    from accounts.models import User
+    
+    customer_id = invoice.get('customer')
+    
+    try:
+        user = User.objects.get(stripe_customer_id=customer_id)
+        user.subscription_status = 'past_due'
+        user.save(update_fields=['subscription_status'])
+        # TODO: Send email notification
+    except User.DoesNotExist:
+        pass

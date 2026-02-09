@@ -30,11 +30,11 @@ urlpatterns = [
     path("api-keys/", include("sites.api_key_urls")),
     # Site management
     path("sites/", include("sites.urls")),
-    # Page management
+    # WordPress integration endpoints (scans, page sync) - MUST be before pages/ to catch pages/sync/
+    path("", include("integrations.urls")),
+    # Page management (generic CRUD)
     path("pages/", include("seo.urls")),
     # Billing and subscriptions
     path("billing/", include("billing.urls")),
-    # WordPress integration endpoints (scans, page sync)
-    path("", include("integrations.urls")),
 ]
 

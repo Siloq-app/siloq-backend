@@ -1,87 +1,31 @@
 """
-Serializers for Page and SEOData models.
+Serializers for SEO models.
 """
 from rest_framework import serializers
-from .models import Page, SEOData
-from sites.serializers import SiteSerializer
-
-
-class SEODataSerializer(serializers.ModelSerializer):
-    """Serializer for SEOData model."""
-    
-    class Meta:
-        model = SEOData
-        fields = (
-            'id', 'meta_title', 'meta_description', 'meta_keywords',
-            'h1_count', 'h1_text', 'h2_count', 'h2_texts', 'h3_count', 'h3_texts',
-            'internal_links_count', 'external_links_count', 'internal_links', 'external_links',
-            'images_count', 'images_without_alt', 'images',
-            'word_count', 'reading_time_minutes',
-            'seo_score', 'issues', 'recommendations',
-            'has_canonical', 'canonical_url', 'has_schema', 'schema_type',
-            'scanned_at', 'scan_version'
-        )
-        read_only_fields = ('id', 'scanned_at')
-
-
-class PageSerializer(serializers.ModelSerializer):
-    """Serializer for Page model."""
-    site = SiteSerializer(read_only=True)
-    seo_data = SEODataSerializer(read_only=True)
-
-    class Meta:
-        model = Page
-        fields = (
-            'id', 'site', 'wp_post_id', 'url', 'title', 'slug',
-            'content', 'excerpt', 'status', 'published_at', 'modified_at',
-            'parent_id', 'menu_order', 'yoast_title', 'yoast_description',
-            'featured_image', 'siloq_page_id', 'last_synced_at',
-            'created_at', 'updated_at', 'seo_data'
-        )
-        read_only_fields = ('id', 'created_at', 'updated_at', 'last_synced_at')
+from .models import (
+    Page, SEOData, TopicCluster, CannibalizationIssue,
+    CannibalizationIssuePage, ReverseSilo, ReverseSiloSupporting,
+    PendingAction
+)
 
 
 class PageListSerializer(serializers.ModelSerializer):
-    """Lightweight serializer for page lists."""
-    seo_score = serializers.SerializerMethodField()
-    issue_count = serializers.SerializerMethodField()
-
+    """Lightweight page serializer for lists."""
     class Meta:
         model = Page
-        fields = (
-            'id', 'url', 'title', 'status', 'published_at',
-            'last_synced_at', 'seo_score', 'issue_count'
-        )
+        fields = ['id', 'title', 'url', 'slug', 'status']
 
-    def get_seo_score(self, obj):
-        """Get SEO score from related SEOData."""
-        # Access prefetched seo_data if available, otherwise use direct access
-        if hasattr(obj, '_prefetched_objects_cache') and 'seo_data' in obj._prefetched_objects_cache:
-            seo_data_list = obj._prefetched_objects_cache['seo_data']
-            if seo_data_list:
-                return seo_data_list[0].seo_score
-            return None
-        # For OneToOneField, try direct access
-        try:
-            if hasattr(obj, 'seo_data') and obj.seo_data:
-                return obj.seo_data.seo_score
-        except SEOData.DoesNotExist:
-            pass
-        return None
 
-    def get_issue_count(self, obj):
-        """Get issue count from related SEOData."""
-        if hasattr(obj, '_prefetched_objects_cache') and 'seo_data' in obj._prefetched_objects_cache:
-            seo_data_list = obj._prefetched_objects_cache['seo_data']
-            if seo_data_list and seo_data_list[0].issues:
-                return len(seo_data_list[0].issues)
-            return 0
-        try:
-            if hasattr(obj, 'seo_data') and obj.seo_data and obj.seo_data.issues:
-                return len(obj.seo_data.issues)
-        except SEOData.DoesNotExist:
-            pass
-        return 0
+class PageSerializer(serializers.ModelSerializer):
+    """Full page serializer with SEO data."""
+    class Meta:
+        model = Page
+        fields = [
+            'id', 'wp_post_id', 'url', 'title', 'slug', 'content',
+            'excerpt', 'status', 'published_at', 'modified_at',
+            'yoast_title', 'yoast_description', 'featured_image',
+            'last_synced_at', 'created_at'
+        ]
 
 
 class PageSyncSerializer(serializers.Serializer):
@@ -89,27 +33,169 @@ class PageSyncSerializer(serializers.Serializer):
     wp_post_id = serializers.IntegerField()
     url = serializers.URLField()
     title = serializers.CharField(max_length=500)
+    slug = serializers.SlugField(max_length=500, required=False, allow_blank=True)
     content = serializers.CharField(required=False, allow_blank=True)
     excerpt = serializers.CharField(required=False, allow_blank=True)
-    status = serializers.CharField(default='publish')
+    post_type = serializers.CharField(required=False)
+    post_status = serializers.CharField(required=False)
     published_at = serializers.DateTimeField(required=False, allow_null=True)
     modified_at = serializers.DateTimeField(required=False, allow_null=True)
-    slug = serializers.CharField(max_length=500, required=False, allow_blank=True)
-    parent_id = serializers.IntegerField(required=False, allow_null=True)
-    menu_order = serializers.IntegerField(default=0)
-    yoast_title = serializers.CharField(required=False, allow_blank=True)
-    yoast_description = serializers.CharField(required=False, allow_blank=True)
-    featured_image = serializers.URLField(required=False, allow_blank=True)
 
-    def to_internal_value(self, data):
-        """Flatten nested meta.yoast_title, meta.yoast_description, meta.featured_image if present."""
-        if isinstance(data, dict) and 'meta' in data and isinstance(data['meta'], dict):
-            meta = data['meta']
-            data = dict(data)
-            if 'yoast_title' not in data and meta.get('yoast_title') is not None:
-                data['yoast_title'] = meta['yoast_title']
-            if 'yoast_description' not in data and meta.get('yoast_description') is not None:
-                data['yoast_description'] = meta['yoast_description']
-            if 'featured_image' not in data and meta.get('featured_image') is not None:
-                data['featured_image'] = meta['featured_image']
-        return super().to_internal_value(data)
+
+class SEODataSerializer(serializers.ModelSerializer):
+    """Full SEO data serializer."""
+    class Meta:
+        model = SEOData
+        exclude = ['page']
+
+
+class TopicClusterSerializer(serializers.ModelSerializer):
+    """Topic cluster serializer."""
+    class Meta:
+        model = TopicCluster
+        fields = ['id', 'name', 'created_at']
+
+
+# ============================================================
+# Dashboard API Serializers
+# ============================================================
+
+class HealthSummarySerializer(serializers.Serializer):
+    """
+    Site health summary for dashboard.
+    GET /sites/{id}/health-summary
+    """
+    health_score = serializers.IntegerField()
+    health_score_delta = serializers.IntegerField(help_text="Change vs last week")
+    cannibalization_count = serializers.IntegerField()
+    silo_count = serializers.IntegerField()
+    page_count = serializers.IntegerField()
+    missing_links_count = serializers.IntegerField()
+    last_scan_at = serializers.DateTimeField(allow_null=True)
+
+
+class CompetingPageSerializer(serializers.ModelSerializer):
+    """Page info for cannibalization issues."""
+    impression_share = serializers.DecimalField(
+        max_digits=5, decimal_places=2, 
+        source='cannibalization_issues.first.impression_share',
+        read_only=True
+    )
+    
+    class Meta:
+        model = Page
+        fields = ['id', 'url', 'title', 'impression_share']
+
+
+class CannibalizationIssueSerializer(serializers.ModelSerializer):
+    """
+    Cannibalization issue for dashboard.
+    GET /sites/{id}/cannibalization-issues
+    """
+    competing_pages = serializers.SerializerMethodField()
+    suggested_king = PageListSerializer(source='recommended_target_page', read_only=True)
+    
+    class Meta:
+        model = CannibalizationIssue
+        fields = [
+            'id', 'keyword', 'severity', 'recommendation_type',
+            'total_impressions', 'competing_pages', 'suggested_king',
+            'created_at', 'updated_at'
+        ]
+    
+    def get_competing_pages(self, obj):
+        pages = []
+        for cp in obj.competing_pages.select_related('page').order_by('order'):
+            pages.append({
+                'id': cp.page.id,
+                'url': cp.page.url,
+                'title': cp.page.title,
+                'impression_share': float(cp.impression_share) if cp.impression_share else None
+            })
+        return pages
+
+
+class CannibalizationIssueListSerializer(serializers.Serializer):
+    """Response wrapper for cannibalization issues list."""
+    issues = CannibalizationIssueSerializer(many=True)
+    total = serializers.IntegerField()
+
+
+class SupportingPageSerializer(serializers.ModelSerializer):
+    """Supporting page in a silo."""
+    is_linked = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Page
+        fields = ['id', 'url', 'title', 'status', 'is_linked']
+    
+    def get_is_linked(self, obj):
+        return True
+
+
+class ReverseSiloSerializer(serializers.ModelSerializer):
+    """
+    Reverse Silo for dashboard.
+    GET /sites/{id}/silos
+    """
+    target_page = PageListSerializer(read_only=True)
+    supporting_pages = serializers.SerializerMethodField()
+    supporting_count = serializers.SerializerMethodField()
+    linked_count = serializers.SerializerMethodField()
+    topic_cluster = TopicClusterSerializer(read_only=True)
+    
+    class Meta:
+        model = ReverseSilo
+        fields = [
+            'id', 'name', 'target_page', 'topic_cluster',
+            'supporting_pages', 'supporting_count', 'linked_count',
+            'created_at'
+        ]
+    
+    def get_supporting_pages(self, obj):
+        pages = []
+        for sp in obj.supporting_pages.select_related('page').order_by('order'):
+            pages.append({
+                'id': sp.page.id,
+                'url': sp.page.url,
+                'title': sp.page.title,
+                'status': sp.page.status,
+                'order': sp.order
+            })
+        return pages
+    
+    def get_supporting_count(self, obj):
+        return obj.supporting_pages.count()
+    
+    def get_linked_count(self, obj):
+        return obj.supporting_pages.count()
+
+
+class ReverseSiloListSerializer(serializers.Serializer):
+    """Response wrapper for silos list."""
+    silos = ReverseSiloSerializer(many=True)
+    total = serializers.IntegerField()
+
+
+class PendingActionSerializer(serializers.ModelSerializer):
+    """
+    Pending action for approval queue.
+    GET /sites/{id}/pending-approvals
+    """
+    is_destructive = serializers.BooleanField(read_only=True)
+    related_issue = CannibalizationIssueSerializer(read_only=True)
+    
+    class Meta:
+        model = PendingAction
+        fields = [
+            'id', 'action_type', 'description', 'risk', 'status',
+            'impact', 'doctrine', 'is_destructive',
+            'related_issue', 'related_silo',
+            'created_at', 'rollback_expires_at'
+        ]
+
+
+class PendingActionListSerializer(serializers.Serializer):
+    """Response wrapper for pending actions."""
+    pending_approvals = PendingActionSerializer(many=True)
+    total = serializers.IntegerField()

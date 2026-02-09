@@ -1,14 +1,11 @@
 """
-Views for Page and SEOData management.
+Page management views.
+Handles listing and retrieving pages with SEO data.
 """
-from rest_framework import viewsets, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
+from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
-from django.shortcuts import get_object_or_404
-from django.utils import timezone
-from .models import Page, SEOData
-from .serializers import PageSerializer, PageListSerializer, PageSyncSerializer, SEODataSerializer
+from .models import Page
+from .serializers import PageSerializer, PageListSerializer
 from sites.models import Site
 
 
@@ -39,22 +36,3 @@ class PageViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == 'list':
             return PageListSerializer
         return PageSerializer
-
-    @action(detail=True, methods=['get'])
-    def seo(self, request, pk=None):
-        """
-        Get detailed SEO data for a page.
-        
-        GET /api/v1/pages/{id}/seo/
-        """
-        page = self.get_object()
-        seo_data = page.seo_data.first()
-        
-        if not seo_data:
-            return Response(
-                {'message': 'No SEO data available for this page'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        serializer = SEODataSerializer(seo_data)
-        return Response(serializer.data)

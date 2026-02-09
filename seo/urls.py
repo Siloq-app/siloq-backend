@@ -3,7 +3,7 @@ URL routing for SEO app.
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import PageViewSet
+from .pages import PageViewSet
 
 router = DefaultRouter()
 router.register(r'', PageViewSet, basename='page')

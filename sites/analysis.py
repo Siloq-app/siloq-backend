@@ -124,8 +124,11 @@ def detect_cannibalization(pages, include_noindex: bool = False) -> List[Dict[st
         # Skip noindex pages unless explicitly included
         if not include_noindex and getattr(page, 'is_noindex', False):
             continue
-        # Get keywords for this page
-        seo_data = page.seo_data.first() if hasattr(page, 'seo_data') else None
+        # Get keywords for this page (seo_data is OneToOneField, not queryset)
+        try:
+            seo_data = page.seo_data
+        except Exception:
+            seo_data = None
         meta_title = seo_data.meta_title if seo_data else ''
         meta_description = seo_data.meta_description if seo_data else ''
         
@@ -252,9 +255,14 @@ def calculate_health_score(site) -> Dict[str, Any]:
     
     score -= min(cannibalization_penalty, 40)  # Cap penalty at 40
     
-    # SEO data penalty
-    pages_without_seo = sum(1 for p in pages if not p.seo_data.exists())
-    seo_data_penalty = min((pages_without_seo / total_pages) * 20, 20)
+    # SEO data penalty (seo_data is OneToOneField)
+    pages_without_seo = 0
+    for p in pages:
+        try:
+            _ = p.seo_data
+        except Exception:
+            pages_without_seo += 1
+    seo_data_penalty = min((pages_without_seo / total_pages) * 20, 20) if total_pages > 0 else 0
     score -= seo_data_penalty
     
     # Money pages bonus

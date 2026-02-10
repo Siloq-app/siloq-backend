@@ -14,8 +14,9 @@ urlpatterns = [
     path('api-keys/', include('sites.api_key_urls')),
     # Site management
     path('sites/', include('sites.urls')),
-    # Page management
-    path('pages/', include('seo.urls')),
-    # WordPress integration endpoints (scans, page sync)
+    # WordPress integration endpoints (scans, page sync) - MUST come before seo.urls
+    # so that /pages/sync/ is matched here, not by the seo router
     path('', include('integrations.urls')),
+    # Page management (dashboard read-only)
+    path('pages/', include('seo.urls')),
 ]

@@ -264,6 +264,29 @@ def get_scan_report(request, scan_id):
 
 @csrf_exempt
 @api_view(['GET'])
+@permission_classes([IsJWTOrAPIKeyAuthenticated])
+def debug_user_pages(request):
+    """
+    DEBUG ONLY - Shows what pages the current authenticated user can see.
+    """
+    user = request.user
+    user_sites = Site.objects.filter(user=user)
+    pages = Page.objects.filter(site__in=user_sites)
+    
+    return Response({
+        'authenticated_user': {
+            'id': user.id,
+            'email': user.email,
+        },
+        'user_sites': list(user_sites.values('id', 'name', 'url')),
+        'user_sites_count': user_sites.count(),
+        'pages_count': pages.count(),
+        'pages_sample': list(pages.values('id', 'title', 'site_id')[:5]),
+    })
+
+
+@csrf_exempt
+@api_view(['GET'])
 @permission_classes([AllowAny])
 def debug_page_count(request):
     """

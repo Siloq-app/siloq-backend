@@ -28,6 +28,7 @@ class Site(models.Model):
     )
     is_active = models.BooleanField(default=True)
     last_synced_at = models.DateTimeField(null=True, blank=True)
+    sync_requested_at = models.DateTimeField(null=True, blank=True, help_text="When user requested a sync from dashboard")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

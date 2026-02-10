@@ -204,6 +204,51 @@ class SiteViewSet(viewsets.ModelViewSet):
             'total': results['recommendation_count'],
         })
 
+    @action(detail=True, methods=['post'], url_path='trigger-sync')
+    def trigger_sync(self, request, pk=None):
+        """
+        Trigger a sync request for a site.
+        
+        POST /api/v1/sites/{id}/trigger-sync/
+        
+        This endpoint marks the site as needing a sync.
+        The WordPress plugin will pick this up on its next check.
+        
+        For now, returns instructions for manual sync.
+        """
+        site = self.get_object()
+        
+        # Update last sync request timestamp
+        site.sync_requested_at = timezone.now()
+        site.save(update_fields=['sync_requested_at'])
+        
+        return Response({
+            'message': 'Sync requested',
+            'site_id': site.id,
+            'site_name': site.name,
+            'instructions': 'Go to your WordPress admin → Siloq Settings → Click "Sync Now" to push pages to Siloq.',
+            'sync_requested_at': site.sync_requested_at,
+        })
+
+    @action(detail=True, methods=['get'], url_path='sync-status')
+    def sync_status(self, request, pk=None):
+        """
+        Get sync status for a site.
+        
+        GET /api/v1/sites/{id}/sync-status/
+        """
+        site = self.get_object()
+        page_count = site.pages.count()
+        
+        return Response({
+            'site_id': site.id,
+            'site_name': site.name,
+            'page_count': page_count,
+            'last_synced_at': site.last_synced_at,
+            'sync_requested_at': getattr(site, 'sync_requested_at', None),
+            'is_synced': page_count > 0,
+        })
+
 
 class APIKeyViewSet(viewsets.ModelViewSet):
     """

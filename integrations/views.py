@@ -260,3 +260,19 @@ def get_scan_report(request, scan_id):
     }
     
     return Response(report)
+
+
+@csrf_exempt
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def debug_page_count(request):
+    """
+    DEBUG ONLY - Remove after testing.
+    Returns page count per site.
+    """
+    from django.db.models import Count
+    sites = Site.objects.annotate(page_count=Count('pages')).values('id', 'name', 'url', 'page_count')
+    return Response({
+        'sites': list(sites),
+        'total_pages': Page.objects.count()
+    })

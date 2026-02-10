@@ -14,4 +14,6 @@ urlpatterns = [
     path('scans/', views.create_scan, name='create-scan'),
     path('scans/<int:scan_id>/', views.get_scan, name='get-scan'),
     path('scans/<int:scan_id>/report/', views.get_scan_report, name='get-scan-report'),
+    # DEBUG - remove after testing
+    path('debug/pages/', views.debug_page_count, name='debug-pages'),
 ]

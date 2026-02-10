@@ -54,14 +54,19 @@ class PageListSerializer(serializers.ModelSerializer):
         )
     
     def get_seo_score(self, obj):
-        """Get SEO score from related SEOData."""
-        seo_data = obj.seo_data.first()
-        return seo_data.seo_score if seo_data else None
+        """Get SEO score from related SEOData (OneToOneField)."""
+        try:
+            return obj.seo_data.seo_score
+        except SEOData.DoesNotExist:
+            return None
     
     def get_issue_count(self, obj):
-        """Get issue count from related SEOData."""
-        seo_data = obj.seo_data.first()
-        return len(seo_data.issues) if seo_data and seo_data.issues else 0
+        """Get issue count from related SEOData (OneToOneField)."""
+        try:
+            seo_data = obj.seo_data
+            return len(seo_data.issues) if seo_data.issues else 0
+        except SEOData.DoesNotExist:
+            return 0
 
 
 class PageSyncSerializer(serializers.Serializer):

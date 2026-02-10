@@ -32,7 +32,7 @@ class PageViewSet(viewsets.ModelViewSet):
         if site_id:
             queryset = queryset.filter(site_id=site_id)
         
-        return queryset.select_related('site').prefetch_related('seo_data')
+        return queryset.select_related('site', 'seo_data')
 
     def get_serializer_class(self):
         """Use lightweight serializer for list, full serializer for detail."""
@@ -48,7 +48,10 @@ class PageViewSet(viewsets.ModelViewSet):
         GET /api/v1/pages/{id}/seo/
         """
         page = self.get_object()
-        seo_data = page.seo_data.first()
+        try:
+            seo_data = page.seo_data
+        except Exception:
+            seo_data = None
         
         if not seo_data:
             return Response(

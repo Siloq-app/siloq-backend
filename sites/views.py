@@ -49,11 +49,14 @@ class SiteViewSet(viewsets.ModelViewSet):
         total_pages = pages.count()
         
         # Calculate SEO health score based on issues
-        seo_data_list = [page.seo_data.first() for page in pages if page.seo_data.exists()]
-        total_issues = sum(
-            len(seo_data.issues) if seo_data and seo_data.issues else 0
-            for seo_data in seo_data_list
-        )
+        total_issues = 0
+        for page in pages:
+            try:
+                seo_data = page.seo_data
+                if seo_data and seo_data.issues:
+                    total_issues += len(seo_data.issues)
+            except Exception:
+                pass  # Page has no SEO data
         
         # Simple health score calculation (0-100)
         # Lower issues = higher score

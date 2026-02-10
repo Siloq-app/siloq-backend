@@ -377,6 +377,175 @@ class SiteViewSet(viewsets.ModelViewSet):
             'total': len(actions),
         })
 
+    @action(detail=True, methods=['get'], url_path='internal-links')
+    def internal_links(self, request, pk=None):
+        """
+        Get complete internal link analysis for a site.
+        
+        GET /api/v1/sites/{id}/internal-links/
+        
+        Returns:
+        {
+            "health_score": 72,
+            "health_breakdown": {...},
+            "total_issues": 15,
+            "issues": {
+                "anchor_conflicts": [...],
+                "homepage_theft": [...],
+                "missing_target_links": [...],
+                "missing_sibling_links": [...],
+                "orphan_pages": [...],
+            },
+            "structure": {
+                "homepage": {...},
+                "silos": [...]
+            },
+            "recommendations": [...]
+        }
+        """
+        from seo.link_analysis import analyze_internal_links
+        
+        site = self.get_object()
+        analysis = analyze_internal_links(site)
+        
+        return Response(analysis)
+
+    @action(detail=True, methods=['get'], url_path='link-structure')
+    def link_structure(self, request, pk=None):
+        """
+        Get silo structure for visualization.
+        
+        GET /api/v1/sites/{id}/link-structure/
+        
+        Returns hierarchical structure optimized for visualization:
+        - Homepage at top
+        - Target pages in middle
+        - Supporting pages at bottom
+        - Links between pages
+        """
+        from seo.link_analysis import get_silo_structure
+        
+        site = self.get_object()
+        structure = get_silo_structure(site)
+        
+        return Response(structure)
+
+    @action(detail=True, methods=['get'], url_path='anchor-conflicts')
+    def anchor_conflicts(self, request, pk=None):
+        """
+        Get all anchor text conflicts for a site.
+        
+        GET /api/v1/sites/{id}/anchor-conflicts/
+        """
+        from seo.link_analysis import detect_anchor_conflicts
+        
+        site = self.get_object()
+        conflicts = detect_anchor_conflicts(site)
+        
+        return Response({
+            'conflicts': conflicts,
+            'total': len(conflicts),
+        })
+
+    @action(detail=True, methods=['post'], url_path='sync-links')
+    def sync_links(self, request, pk=None):
+        """
+        Extract and sync internal links from all pages.
+        
+        POST /api/v1/sites/{id}/sync-links/
+        
+        This extracts links from page content and stores them for analysis.
+        Run after page sync to update link data.
+        """
+        from seo.link_analysis import sync_internal_links
+        from seo.models import Page
+        
+        site = self.get_object()
+        pages = Page.objects.filter(site=site, status='publish')
+        
+        total_links = 0
+        for page in pages:
+            links_found = sync_internal_links(page)
+            total_links += links_found
+        
+        return Response({
+            'message': 'Internal links synced successfully',
+            'pages_processed': pages.count(),
+            'total_links_found': total_links,
+        })
+
+    @action(detail=True, methods=['post'], url_path='assign-silo')
+    def assign_silo(self, request, pk=None):
+        """
+        Assign a supporting page to a silo (target page).
+        
+        POST /api/v1/sites/{id}/assign-silo/
+        Body: { "page_id": 123, "target_page_id": 456 }
+        
+        Set target_page_id to null to unassign.
+        """
+        from seo.models import Page
+        
+        site = self.get_object()
+        page_id = request.data.get('page_id')
+        target_page_id = request.data.get('target_page_id')
+        
+        if not page_id:
+            return Response(
+                {'error': 'page_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        page = get_object_or_404(Page, id=page_id, site=site)
+        
+        if target_page_id:
+            target = get_object_or_404(Page, id=target_page_id, site=site, is_money_page=True)
+            page.parent_silo = target
+        else:
+            page.parent_silo = None
+        
+        page.save(update_fields=['parent_silo'])
+        
+        return Response({
+            'message': 'Silo assignment updated',
+            'page_id': page.id,
+            'page_title': page.title,
+            'parent_silo_id': page.parent_silo_id,
+        })
+
+    @action(detail=True, methods=['post'], url_path='set-homepage')
+    def set_homepage(self, request, pk=None):
+        """
+        Mark a page as the homepage.
+        
+        POST /api/v1/sites/{id}/set-homepage/
+        Body: { "page_id": 123 }
+        """
+        from seo.models import Page
+        
+        site = self.get_object()
+        page_id = request.data.get('page_id')
+        
+        if not page_id:
+            return Response(
+                {'error': 'page_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Clear existing homepage
+        Page.objects.filter(site=site, is_homepage=True).update(is_homepage=False)
+        
+        # Set new homepage
+        page = get_object_or_404(Page, id=page_id, site=site)
+        page.is_homepage = True
+        page.save(update_fields=['is_homepage'])
+        
+        return Response({
+            'message': 'Homepage set',
+            'page_id': page.id,
+            'page_title': page.title,
+        })
+
 
 class APIKeyViewSet(viewsets.ModelViewSet):
     """

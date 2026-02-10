@@ -12,14 +12,15 @@ from .serializers import PageSerializer, PageListSerializer, PageSyncSerializer,
 from sites.models import Site
 
 
-class PageViewSet(viewsets.ReadOnlyModelViewSet):
+class PageViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for viewing pages (read-only for dashboard).
+    ViewSet for viewing and managing pages.
     
     list: GET /api/v1/pages/ - List pages (filtered by site_id)
     retrieve: GET /api/v1/pages/{id}/ - Get page details with SEO data
     """
     permission_classes = [IsAuthenticated]
+    http_method_names = ['get', 'patch', 'head', 'options']  # Only allow GET and PATCH
 
     def get_queryset(self):
         """Return pages for sites owned by the current user."""
@@ -31,7 +32,7 @@ class PageViewSet(viewsets.ReadOnlyModelViewSet):
         if site_id:
             queryset = queryset.filter(site_id=site_id)
         
-        return queryset.select_related('site', 'seo_data')
+        return queryset.select_related('site').prefetch_related('seo_data')
 
     def get_serializer_class(self):
         """Use lightweight serializer for list, full serializer for detail."""
@@ -57,3 +58,28 @@ class PageViewSet(viewsets.ReadOnlyModelViewSet):
         
         serializer = SEODataSerializer(seo_data)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def toggle_money_page(self, request, pk=None):
+        """
+        Toggle whether a page is a money page.
+        
+        POST /api/v1/pages/{id}/toggle_money_page/
+        Body: { "is_money_page": true/false }
+        """
+        page = self.get_object()
+        is_money = request.data.get('is_money_page')
+        
+        if is_money is None:
+            # Toggle if not specified
+            page.is_money_page = not page.is_money_page
+        else:
+            page.is_money_page = bool(is_money)
+        
+        page.save(update_fields=['is_money_page'])
+        
+        return Response({
+            'id': page.id,
+            'is_money_page': page.is_money_page,
+            'message': 'Money page status updated'
+        })

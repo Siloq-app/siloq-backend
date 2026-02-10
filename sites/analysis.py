@@ -103,7 +103,7 @@ def calculate_keyword_similarity(kw1: str, kw2: str) -> float:
     return intersection / union if union > 0 else 0.0
 
 
-def detect_cannibalization(pages) -> List[Dict[str, Any]]:
+def detect_cannibalization(pages, include_noindex: bool = False) -> List[Dict[str, Any]]:
     """
     Detect keyword cannibalization across pages.
     
@@ -112,6 +112,7 @@ def detect_cannibalization(pages) -> List[Dict[str, Any]]:
     
     Args:
         pages: QuerySet of Page objects with content
+        include_noindex: If False (default), exclude noindex pages from analysis
         
     Returns:
         List of cannibalization issues with competing pages
@@ -120,6 +121,9 @@ def detect_cannibalization(pages) -> List[Dict[str, Any]]:
     keyword_pages = defaultdict(list)
     
     for page in pages:
+        # Skip noindex pages unless explicitly included
+        if not include_noindex and getattr(page, 'is_noindex', False):
+            continue
         # Get keywords for this page
         seo_data = page.seo_data.first() if hasattr(page, 'seo_data') else None
         meta_title = seo_data.meta_title if seo_data else ''

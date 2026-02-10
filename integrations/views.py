@@ -268,10 +268,12 @@ def get_scan_report(request, scan_id):
 def debug_page_count(request):
     """
     DEBUG ONLY - Remove after testing.
-    Returns page count per site.
+    Returns page count per site with ownership info.
     """
     from django.db.models import Count
-    sites = Site.objects.annotate(page_count=Count('pages')).values('id', 'name', 'url', 'page_count')
+    sites = Site.objects.annotate(page_count=Count('pages')).values(
+        'id', 'name', 'url', 'page_count', 'user_id', 'user__email', 'last_synced_at'
+    )
     return Response({
         'sites': list(sites),
         'total_pages': Page.objects.count()

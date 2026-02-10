@@ -6,9 +6,11 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from .models import Site, APIKey
 from .serializers import SiteSerializer, APIKeySerializer, APIKeyCreateSerializer
 from .permissions import IsSiteOwner, IsAPIKeyOwner
+from .analysis import analyze_site, detect_cannibalization, calculate_health_score
 
 
 class SiteViewSet(viewsets.ModelViewSet):
@@ -68,6 +70,138 @@ class SiteViewSet(viewsets.ModelViewSet):
             'total_pages': total_pages,
             'total_issues': total_issues,
             'last_synced_at': site.last_synced_at,
+        })
+
+    @action(detail=True, methods=['get'], url_path='health-summary')
+    def health_summary(self, request, pk=None):
+        """
+        Get detailed health summary for dashboard display.
+        
+        GET /api/v1/sites/{id}/health-summary/
+        
+        Returns:
+        {
+            "health_score": 72,
+            "health_score_delta": 8,
+            "cannibalization_count": 3,
+            "silo_count": 2,
+            "page_count": 47,
+            "missing_links_count": 12,
+            "last_scan_at": "2026-02-03T10:30:00Z"
+        }
+        """
+        site = self.get_object()
+        pages = site.pages.all().prefetch_related('seo_data')
+        
+        # Calculate health using analysis module
+        health = calculate_health_score(site)
+        
+        # Detect cannibalization issues
+        issues = detect_cannibalization(pages)
+        
+        return Response({
+            'health_score': health['health_score'],
+            'health_score_delta': health['health_score_delta'],
+            'cannibalization_count': len(issues),
+            'silo_count': 0,  # TODO: Add when silos are implemented
+            'page_count': pages.count(),
+            'money_page_count': pages.filter(is_money_page=True).count(),
+            'missing_links_count': 0,  # TODO: Add link analysis
+            'last_scan_at': site.last_synced_at,
+        })
+
+    @action(detail=True, methods=['get'], url_path='cannibalization-issues')
+    def cannibalization_issues(self, request, pk=None):
+        """
+        Get all cannibalization issues for a site.
+        
+        GET /api/v1/sites/{id}/cannibalization-issues/
+        
+        Returns:
+        {
+            "issues": [
+                {
+                    "id": "uuid",
+                    "keyword": "kitchen remodeling",
+                    "severity": "high",
+                    "competing_pages": [...],
+                    "suggested_king": {...},
+                    "recommendation_type": "consolidate"
+                }
+            ],
+            "total": 3
+        }
+        """
+        site = self.get_object()
+        pages = site.pages.all().prefetch_related('seo_data')
+        
+        # Detect cannibalization
+        issues = detect_cannibalization(pages)
+        
+        # Format for API response
+        formatted_issues = []
+        for i, issue in enumerate(issues):
+            formatted_issues.append({
+                'id': i + 1,  # Simple ID for now
+                'keyword': issue['keyword'],
+                'severity': issue['severity'],
+                'recommendation_type': issue['recommendation_type'],
+                'total_impressions': issue['total_impressions'],
+                'competing_pages': [
+                    {
+                        'id': p['id'],
+                        'url': p['url'],
+                        'title': p['title'],
+                        'impression_share': None,
+                    }
+                    for p in issue['competing_pages']
+                ],
+                'suggested_king': {
+                    'id': issue['suggested_king']['id'],
+                    'url': issue['suggested_king']['url'],
+                    'title': issue['suggested_king']['title'],
+                } if issue['suggested_king'] else None,
+            })
+        
+        return Response({
+            'issues': formatted_issues,
+            'total': len(formatted_issues),
+        })
+
+    @action(detail=True, methods=['post'])
+    def analyze(self, request, pk=None):
+        """
+        Run full site analysis.
+        
+        POST /api/v1/sites/{id}/analyze/
+        
+        Triggers analysis of:
+        - Cannibalization detection
+        - Content recommendations
+        - Health score calculation
+        
+        Returns comprehensive analysis results.
+        """
+        site = self.get_object()
+        
+        # Run full analysis
+        results = analyze_site(site)
+        
+        return Response(results)
+
+    @action(detail=True, methods=['get'])
+    def recommendations(self, request, pk=None):
+        """
+        Get content and SEO recommendations for a site.
+        
+        GET /api/v1/sites/{id}/recommendations/
+        """
+        site = self.get_object()
+        results = analyze_site(site)
+        
+        return Response({
+            'recommendations': results['recommendations'],
+            'total': results['recommendation_count'],
         })
 
 

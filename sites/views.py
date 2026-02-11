@@ -566,144 +566,21 @@ class SiteViewSet(viewsets.ModelViewSet):
             'page_title': page.title,
         })
 
-    @action(detail=True, methods=['get', 'post', 'patch'], url_path='profile')
-    def profile(self, request, pk=None):
+    @action(detail=True, methods=['get'], url_path='content-suggestions')
+    def content_suggestions(self, request, pk=None):
         """
-        Get or update business profile (onboarding wizard).
+        Get content suggestions for target pages.
         
-        GET /api/v1/sites/{id}/profile/
-        POST/PATCH /api/v1/sites/{id}/profile/
+        GET /api/v1/sites/{id}/content-suggestions/
         
-        Body (POST/PATCH):
-        {
-            "business_type": "local_service",
-            "primary_services": ["SEO Services", "Web Design", "PPC Management"],
-            "service_areas": ["Kansas City, MO", "Lee's Summit, MO"],
-            "target_audience": "Small to medium businesses",
-            "business_description": "Full-service digital marketing agency"
-        }
+        Returns suggested supporting content topics for each target page.
         """
-        from .serializers import BusinessProfileSerializer
+        from seo.link_analysis import generate_content_suggestions
         
         site = self.get_object()
+        suggestions = generate_content_suggestions(site)
         
-        if request.method == 'GET':
-            serializer = BusinessProfileSerializer(site)
-            return Response({
-                **serializer.data,
-                'business_type_choices': [
-                    {'value': choice[0], 'label': choice[1]} 
-                    for choice in Site.BUSINESS_TYPE_CHOICES
-                ],
-            })
-        
-        # POST or PATCH
-        serializer = BusinessProfileSerializer(
-            site, 
-            data=request.data, 
-            partial=(request.method == 'PATCH')
-        )
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        
-        return Response({
-            'message': 'Profile updated successfully',
-            **serializer.data,
-        })
-
-    @action(detail=True, methods=['post'], url_path='generate-silos')
-    def generate_silos(self, request, pk=None):
-        """
-        Auto-generate silo structure based on business profile.
-        
-        POST /api/v1/sites/{id}/generate-silos/
-        
-        Uses business_type and primary_services to suggest:
-        - Target pages (money pages) for each service
-        - Supporting content topics for each target
-        """
-        site = self.get_object()
-        
-        if not site.onboarding_complete:
-            return Response(
-                {'error': 'Please complete business onboarding first'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        suggestions = []
-        
-        for service in site.primary_services:
-            # Create suggested silo for each service
-            silo_suggestion = {
-                'service': service,
-                'suggested_target_page': {
-                    'title': service,
-                    'slug': service.lower().replace(' ', '-'),
-                    'description': f'Main page for {service}',
-                },
-                'suggested_supporting_topics': [],
-            }
-            
-            # Generate supporting topics based on business type
-            if site.business_type == 'local_service':
-                silo_suggestion['suggested_supporting_topics'] = [
-                    f"What is {service}",
-                    f"How much does {service} cost",
-                    f"{service} near me",
-                    f"Benefits of {service}",
-                    f"{service} FAQ",
-                    f"How to choose {service} provider",
-                ]
-            elif site.business_type == 'ecommerce':
-                silo_suggestion['suggested_supporting_topics'] = [
-                    f"Best {service}",
-                    f"{service} buying guide",
-                    f"{service} reviews",
-                    f"{service} comparison",
-                    f"How to use {service}",
-                    f"{service} FAQ",
-                ]
-            elif site.business_type == 'saas':
-                silo_suggestion['suggested_supporting_topics'] = [
-                    f"What is {service}",
-                    f"{service} features",
-                    f"{service} pricing",
-                    f"{service} vs alternatives",
-                    f"{service} use cases",
-                    f"Getting started with {service}",
-                ]
-            else:
-                silo_suggestion['suggested_supporting_topics'] = [
-                    f"What is {service}",
-                    f"{service} guide",
-                    f"{service} tips",
-                    f"{service} best practices",
-                    f"{service} examples",
-                    f"{service} FAQ",
-                ]
-            
-            suggestions.append(silo_suggestion)
-        
-        # Add location-based suggestions for local businesses
-        location_silos = []
-        if site.business_type == 'local_service' and site.service_areas:
-            for area in site.service_areas[:5]:  # Limit to top 5 areas
-                location_silos.append({
-                    'area': area,
-                    'suggested_page': {
-                        'title': f"Services in {area}",
-                        'slug': f"services-{area.lower().replace(' ', '-').replace(',', '')}",
-                    },
-                    'can_create_per_service': True,
-                })
-        
-        return Response({
-            'service_silos': suggestions,
-            'location_silos': location_silos,
-            'total_suggested_pages': len(suggestions) + sum(
-                len(s['suggested_supporting_topics']) for s in suggestions
-            ) + len(location_silos),
-        })
+        return Response(suggestions)
 
 
 class APIKeyViewSet(viewsets.ModelViewSet):

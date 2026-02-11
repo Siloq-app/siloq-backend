@@ -1,16 +1,22 @@
 """
-Views for Site and APIKey management.
+API Key management views.
+Handles CRUD operations for site-specific API keys.
 """
+import logging
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+
 from .models import Site, APIKey
 from .serializers import SiteSerializer, APIKeySerializer, APIKeyCreateSerializer
 from .permissions import IsSiteOwner, IsAPIKeyOwner
 from .analysis import analyze_site, detect_cannibalization, calculate_health_score
+
+logger = logging.getLogger(__name__)
 
 
 class SiteViewSet(viewsets.ModelViewSet):

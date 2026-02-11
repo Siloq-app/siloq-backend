@@ -28,7 +28,7 @@ class PageSerializer(serializers.ModelSerializer):
     """Serializer for Page model."""
     site = SiteSerializer(read_only=True)
     seo_data = SEODataSerializer(read_only=True)
-    
+
     class Meta:
         model = Page
         fields = (
@@ -45,21 +45,21 @@ class PageListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for page lists."""
     seo_score = serializers.SerializerMethodField()
     issue_count = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = Page
         fields = (
             'id', 'url', 'title', 'status', 'published_at',
             'last_synced_at', 'seo_score', 'issue_count', 'is_money_page', 'is_noindex'
         )
-    
+
     def get_seo_score(self, obj):
         """Get SEO score from related SEOData (OneToOneField)."""
         try:
             return obj.seo_data.seo_score
         except SEOData.DoesNotExist:
             return None
-    
+
     def get_issue_count(self, obj):
         """Get issue count from related SEOData (OneToOneField)."""
         try:

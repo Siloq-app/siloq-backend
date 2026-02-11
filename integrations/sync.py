@@ -1,8 +1,10 @@
 """
-Views for WordPress plugin integration endpoints.
-All views must be csrf_exempt because they're called from WordPress plugin (external API client).
+WordPress sync views.
+Handles API key verification, page sync, and SEO data sync.
 """
+import logging
 import re
+
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.response import Response
@@ -10,16 +12,25 @@ from rest_framework.permissions import AllowAny
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
+
 from sites.models import Site, APIKey
 from seo.models import Page, SEOData
 from seo.serializers import PageSyncSerializer as SEOPageSyncSerializer
 from .models import Scan
-from .serializers import (
-    APIKeyVerifySerializer, ScanCreateSerializer, ScanSerializer,
-    SEODataSyncSerializer
-)
+from .serializers import SEODataSyncSerializer
 from .permissions import IsAPIKeyAuthenticated, IsJWTOrAPIKeyAuthenticated
 from .authentication import APIKeyAuthentication
+
+logger = logging.getLogger(__name__)
+
+
+def _sanitize_slug(s):
+    """Ensure slug is valid for SlugField (alphanumeric, hyphens, underscores)."""
+    if not s or not isinstance(s, str):
+        return 'page'
+    s = s.strip().lower()
+    s = re.sub(r'[^a-z0-9_-]+', '-', s)
+    return s[:500] or 'page'
 
 
 @csrf_exempt
@@ -47,15 +58,6 @@ def verify_api_key(request):
     }, status=status.HTTP_200_OK)
 
 
-def _sanitize_slug(s):
-    """Ensure slug is valid for SlugField (alphanumeric, hyphens, underscores)."""
-    if not s or not isinstance(s, str):
-        return 'page'
-    s = s.strip().lower()
-    s = re.sub(r'[^a-z0-9_-]+', '-', s)
-    return s[:500] or 'page'
-
-
 @csrf_exempt
 @api_view(['POST'])
 @authentication_classes([APIKeyAuthentication])
@@ -63,13 +65,8 @@ def _sanitize_slug(s):
 def sync_page(request):
     """
     Sync a page from WordPress to Django backend.
-    
-    POST /api/v1/pages/sync
-    Headers: Authorization: Bearer <api_key>
-    Body: { "wp_post_id": 123, "url": "...", "title": "...", ... }
-    
-    Returns: { "page_id": 1, "message": "Page synced successfully" }
     """
+    logger.debug(f"sync_page called, user: {request.user}, auth: {request.auth}")
     site = request.auth['site']
     serializer = SEOPageSyncSerializer(data=request.data)
     
@@ -110,12 +107,13 @@ def sync_page(request):
 
 @csrf_exempt
 @api_view(['POST'])
+@authentication_classes([APIKeyAuthentication])
 @permission_classes([IsAPIKeyAuthenticated])
 def sync_seo_data(request, page_id=None):
     """
     Sync SEO data for a page from WordPress scanner.
     
-    POST /api/v1/pages/{page_id}/seo-data
+    POST /api/v1/pages/{page_id}/seo-data/
     Headers: Authorization: Bearer <api_key>
     Body: { "seo_score": 85, "issues": [...], ... }
     
@@ -315,3 +313,5 @@ def debug_page_count(request):
         'total_sites': Site.objects.count(),
         'pages_sample': pages_sample
     })
+
+    return Response(report)

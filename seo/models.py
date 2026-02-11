@@ -56,7 +56,6 @@ class Page(models.Model):
         related_name='supporting_pages',
         help_text="The money page this supporting page belongs to"
     )
-    
     last_synced_at = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

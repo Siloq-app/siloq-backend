@@ -67,14 +67,36 @@ def sync_page(request):
     Sync a page from WordPress to Django backend.
     """
     logger.debug(f"sync_page called, user: {request.user}, auth: {request.auth}")
+    logger.info(f"sync_page request.data keys: {list(request.data.keys()) if hasattr(request.data, 'keys') else type(request.data)}")
     site = request.auth['site']
     serializer = SEOPageSyncSerializer(data=request.data)
     
     if not serializer.is_valid():
+        logger.warning(f"sync_page validation failed: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     data = dict(serializer.validated_data)
     data['slug'] = _sanitize_slug(data.get('slug') or '')
+    
+    # Handle wp_post_id - can be integer or string like "term_123" for taxonomy terms
+    raw_wp_post_id = data['wp_post_id']
+    if isinstance(raw_wp_post_id, str):
+        if raw_wp_post_id.startswith('term_'):
+            # Taxonomy term - use negative ID to distinguish from posts
+            # term_123 -> -123
+            try:
+                wp_post_id = -int(raw_wp_post_id.replace('term_', ''))
+            except ValueError:
+                wp_post_id = hash(raw_wp_post_id) % 1000000 * -1  # Fallback
+        else:
+            # Try to parse as integer
+            try:
+                wp_post_id = int(raw_wp_post_id)
+            except ValueError:
+                wp_post_id = hash(raw_wp_post_id) % 1000000
+    else:
+        wp_post_id = raw_wp_post_id
+    data['wp_post_id'] = wp_post_id
     
     # Get or create page
     wp_post_id = data['wp_post_id']

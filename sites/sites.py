@@ -387,3 +387,139 @@ class SiteViewSet(viewsets.ModelViewSet):
             'issues_found': len(issues),
             'issues': issues,
         })
+
+    # =========================================================================
+    # GEO Tools
+    # =========================================================================
+    
+    @action(detail=True, methods=['get'], url_path='geo/llms-txt')
+    def generate_llms_txt(self, request, pk=None):
+        """
+        Generate llms.txt content for AI crawler optimization.
+        
+        GET /api/v1/sites/{id}/geo/llms-txt/
+        
+        Returns markdown formatted llms.txt content that can be placed
+        at the site root to help AI engines understand site structure.
+        """
+        site = self.get_object()
+        pages = site.pages.filter(status='publish', is_noindex=False).order_by('url')
+        
+        # Group pages by type
+        from .analysis import classify_page_type
+        
+        services = []
+        products = []
+        categories = []
+        blog_posts = []
+        other_pages = []
+        
+        for page in pages:
+            page_type = classify_page_type(page.url, getattr(page, 'post_type', None))
+            excerpt = (page.excerpt or page.content or '')[:150].strip()
+            excerpt = excerpt.replace('\n', ' ').replace('\r', '')
+            
+            entry = {
+                'title': page.title,
+                'url': page.url,
+                'excerpt': excerpt + '...' if len(excerpt) == 150 else excerpt,
+            }
+            
+            if page_type == 'service':
+                services.append(entry)
+            elif page_type == 'product':
+                products.append(entry)
+            elif page_type == 'category':
+                categories.append(entry)
+            elif page_type in ['blog', 'listicle_blog']:
+                blog_posts.append(entry)
+            elif page_type != 'homepage':
+                other_pages.append(entry)
+        
+        # Build llms.txt content
+        lines = []
+        lines.append(f"# {site.name}")
+        
+        # Business description
+        if site.business_description:
+            lines.append(f"> {site.business_description}")
+        else:
+            lines.append(f"> {site.name} - {site.url}")
+        
+        lines.append("")
+        
+        # Services
+        if services:
+            lines.append("## Services")
+            for s in services[:20]:
+                lines.append(f"- [{s['title']}]({s['url']}): {s['excerpt']}")
+            lines.append("")
+        
+        # Products (for e-commerce)
+        if products:
+            lines.append("## Products")
+            for p in products[:30]:
+                lines.append(f"- [{p['title']}]({p['url']}): {p['excerpt']}")
+            lines.append("")
+        
+        # Categories
+        if categories:
+            lines.append("## Categories")
+            for c in categories[:20]:
+                lines.append(f"- [{c['title']}]({c['url']}): {c['excerpt']}")
+            lines.append("")
+        
+        # Service Areas
+        if site.service_areas:
+            lines.append("## Service Areas")
+            areas = site.service_areas if isinstance(site.service_areas, list) else []
+            for area in areas[:10]:
+                if isinstance(area, str):
+                    lines.append(f"- {area}")
+            lines.append("")
+        
+        # Blog/Resources
+        if blog_posts:
+            lines.append("## Resources")
+            for b in blog_posts[:15]:
+                lines.append(f"- [{b['title']}]({b['url']})")
+            lines.append("")
+        
+        # Contact
+        lines.append("## Contact")
+        lines.append(f"- [Website]({site.url})")
+        
+        llms_txt = '\n'.join(lines)
+        
+        return Response({
+            'site_id': site.id,
+            'site_name': site.name,
+            'llms_txt': llms_txt,
+            'page_count': pages.count(),
+            'sections': {
+                'services': len(services),
+                'products': len(products),
+                'categories': len(categories),
+                'blog_posts': len(blog_posts),
+            },
+            'instructions': "Add this content to a file named 'llms.txt' at your site root (e.g., https://yoursite.com/llms.txt)",
+        })
+    
+    @action(detail=True, methods=['get'], url_path='geo/score')
+    def geo_score(self, request, pk=None):
+        """
+        Get GEO readiness score for a site.
+        
+        GET /api/v1/sites/{id}/geo/score/
+        """
+        site = self.get_object()
+        results = analyze_site(site)
+        
+        return Response({
+            'site_id': site.id,
+            'geo_score': results.get('geo_score', 0),
+            'geo_pages_analyzed': results.get('geo_pages_analyzed', 0),
+            'geo_issues_count': results.get('geo_issues_count', 0),
+            'geo_results': results.get('geo_results', []),
+            'geo_recommendations': results.get('geo_recommendations', []),
+        })

@@ -640,6 +640,194 @@ def calculate_health_score(site) -> Dict[str, Any]:
 
 
 # =============================================================================
+# GEO HEALTH CHECKS (Generative Engine Optimization)
+# =============================================================================
+
+# Phrases that indicate context-dependent writing (bad for AI extraction)
+CONTEXT_DEPENDENT_PHRASES = [
+    r'\bas mentioned above\b', r'\bas stated earlier\b', r'\bas we discussed\b',
+    r'\bthis is why\b', r'\bthat\'s why\b', r'\bfor this reason\b',
+    r'\bas shown above\b', r'\bsee above\b', r'\bbelow we\b',
+    r'\bthe following\b', r'\bthe above\b', r'\bthe latter\b', r'\bthe former\b',
+]
+
+
+def check_entity_grounding(page, business_name: str = None, city: str = None) -> Dict[str, Any]:
+    """
+    GEO Check: Does the page mention business name + city in first 100 words?
+    AI engines use this to validate entity authority.
+    """
+    content = (page.content or '')[:1500]  # Roughly first 100-200 words
+    content_lower = content.lower()
+    
+    has_business_name = False
+    has_city = False
+    
+    if business_name:
+        has_business_name = business_name.lower() in content_lower
+    
+    if city:
+        has_city = city.lower() in content_lower
+    
+    passed = has_business_name and has_city
+    
+    return {
+        'check': 'entity_grounding',
+        'passed': passed,
+        'has_business_name': has_business_name,
+        'has_city': has_city,
+        'recommendation': None if passed else "Add business name and city to the first paragraph for AI entity verification."
+    }
+
+
+def check_answer_capsule(page) -> Dict[str, Any]:
+    """
+    GEO Check: Does the page lead with a direct answer (40-80 words)?
+    AI engines extract the opening paragraph for citations.
+    """
+    content = page.content or ''
+    
+    # Try to find first paragraph (before first H2 or after ~100 words)
+    # Simple heuristic: first 500 chars that aren't headings
+    first_para = ''
+    lines = content.split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Skip headings
+        if line.startswith('#') or line.startswith('<h'):
+            continue
+        # Skip HTML tags
+        clean_line = re.sub(r'<[^>]+>', '', line)
+        if clean_line:
+            first_para = clean_line
+            break
+    
+    word_count = len(first_para.split()) if first_para else 0
+    
+    # Check for Rule of Five elements (simplified)
+    has_specific_data = bool(re.search(r'\$\d+|\d+%|\d+ years?|\d+ reviews?|\d+-star', first_para.lower()))
+    
+    passed = 40 <= word_count <= 120 and has_specific_data
+    
+    return {
+        'check': 'answer_capsule',
+        'passed': passed,
+        'first_para_words': word_count,
+        'has_specific_data': has_specific_data,
+        'recommendation': None if passed else "Add a 40-80 word Answer Capsule with specific data (price, timeframe, credentials) at the start of the page."
+    }
+
+
+def check_schema_presence(page) -> Dict[str, Any]:
+    """
+    GEO Check: Does the page have LocalBusiness, Service, or FAQPage schema?
+    Essential for AI entity verification.
+    """
+    content = page.content or ''
+    
+    # Check for JSON-LD schema
+    has_local_business = 'LocalBusiness' in content or '"@type":"LocalBusiness"' in content
+    has_service = '"Service"' in content or '"@type":"Service"' in content
+    has_faq = 'FAQPage' in content or '"@type":"FAQPage"' in content
+    has_any_schema = 'application/ld+json' in content
+    
+    passed = has_any_schema and (has_local_business or has_service or has_faq)
+    
+    return {
+        'check': 'schema_presence',
+        'passed': passed,
+        'has_schema': has_any_schema,
+        'has_local_business': has_local_business,
+        'has_service': has_service,
+        'has_faq': has_faq,
+        'recommendation': None if passed else "Add FAQPage, Service, or LocalBusiness schema markup for AI entity verification."
+    }
+
+
+def check_extractability(page) -> Dict[str, Any]:
+    """
+    GEO Check: Are paragraphs self-contained or context-dependent?
+    AI engines extract paragraphs in isolation - context-dependent phrases break.
+    """
+    content = (page.content or '').lower()
+    
+    found_phrases = []
+    for pattern in CONTEXT_DEPENDENT_PHRASES:
+        matches = re.findall(pattern, content)
+        found_phrases.extend(matches)
+    
+    passed = len(found_phrases) == 0
+    
+    return {
+        'check': 'extractability',
+        'passed': passed,
+        'context_dependent_count': len(found_phrases),
+        'found_phrases': found_phrases[:5],  # Show first 5
+        'recommendation': None if passed else f"Remove context-dependent phrases ({', '.join(found_phrases[:3])}...) - AI engines extract paragraphs in isolation."
+    }
+
+
+def check_question_headings(page) -> Dict[str, Any]:
+    """
+    GEO Check: Are H2/H3 headings phrased as questions?
+    Question-format headings map directly to AI queries.
+    """
+    content = page.content or ''
+    
+    # Find all H2 and H3 headings
+    h2_matches = re.findall(r'<h2[^>]*>([^<]+)</h2>', content, re.IGNORECASE)
+    h3_matches = re.findall(r'<h3[^>]*>([^<]+)</h3>', content, re.IGNORECASE)
+    
+    # Also check markdown-style
+    md_h2 = re.findall(r'^## (.+)$', content, re.MULTILINE)
+    md_h3 = re.findall(r'^### (.+)$', content, re.MULTILINE)
+    
+    all_headings = h2_matches + h3_matches + md_h2 + md_h3
+    
+    question_headings = [h for h in all_headings if '?' in h or h.lower().startswith(('how', 'what', 'why', 'when', 'where', 'who', 'which', 'can', 'does', 'is', 'are'))]
+    
+    question_ratio = len(question_headings) / len(all_headings) if all_headings else 0
+    passed = question_ratio >= 0.3 or len(all_headings) == 0  # At least 30% questions, or no headings
+    
+    return {
+        'check': 'question_headings',
+        'passed': passed,
+        'total_headings': len(all_headings),
+        'question_headings': len(question_headings),
+        'question_ratio': round(question_ratio, 2),
+        'recommendation': None if passed else "Convert H2/H3 headings to question format (e.g., 'How much does X cost?') for better AI query matching."
+    }
+
+
+def analyze_geo_readiness(page, business_name: str = None, city: str = None) -> Dict[str, Any]:
+    """
+    Run all GEO health checks on a page.
+    Returns a GEO score and individual check results.
+    """
+    checks = [
+        check_entity_grounding(page, business_name, city),
+        check_answer_capsule(page),
+        check_schema_presence(page),
+        check_extractability(page),
+        check_question_headings(page),
+    ]
+    
+    passed_count = sum(1 for c in checks if c['passed'])
+    total_checks = len(checks)
+    geo_score = round((passed_count / total_checks) * 100)
+    
+    return {
+        'geo_score': geo_score,
+        'checks_passed': passed_count,
+        'checks_total': total_checks,
+        'checks': {c['check']: c for c in checks},
+        'recommendations': [c['recommendation'] for c in checks if c['recommendation']],
+    }
+
+
+# =============================================================================
 # MAIN ANALYSIS FUNCTION
 # =============================================================================
 
@@ -652,7 +840,7 @@ def detect_cannibalization(pages, include_noindex: bool = False) -> List[Dict[st
 
 
 def analyze_site(site) -> Dict[str, Any]:
-    """Run full analysis on a site."""
+    """Run full analysis on a site including GEO readiness."""
     pages = site.pages.all().prefetch_related('seo_data')
     
     health = calculate_health_score(site)
@@ -661,6 +849,33 @@ def analyze_site(site) -> Dict[str, Any]:
     # Count by severity
     high_count = sum(1 for i in issues if i['severity'] == 'HIGH')
     medium_count = sum(1 for i in issues if i['severity'] == 'MEDIUM')
+    
+    # Get business info for GEO checks
+    business_name = site.name
+    city = None
+    if site.service_areas:
+        # Try to extract city from service areas
+        areas = site.service_areas if isinstance(site.service_areas, list) else []
+        if areas:
+            city = areas[0] if isinstance(areas[0], str) else None
+    
+    # Run GEO analysis on service/money pages
+    geo_results = []
+    service_pages = [p for p in pages if classify_page_type(p.url, getattr(p, 'post_type', None)) in ['service', 'product', 'category', 'general']]
+    for page in service_pages[:20]:  # Limit to 20 pages
+        geo = analyze_geo_readiness(page, business_name, city)
+        geo_results.append({
+            'page_id': page.id,
+            'page_url': page.url,
+            'page_title': page.title,
+            'geo_score': geo['geo_score'],
+            'checks': geo['checks'],
+            'recommendations': geo['recommendations'],
+        })
+    
+    # Calculate average GEO score
+    avg_geo_score = round(sum(g['geo_score'] for g in geo_results) / len(geo_results)) if geo_results else 0
+    geo_issues_count = sum(1 for g in geo_results if g['geo_score'] < 60)
     
     return {
         'site_id': site.id,
@@ -676,7 +891,40 @@ def analyze_site(site) -> Dict[str, Any]:
         'recommendation_count': len(issues),
         'page_count': pages.count(),
         'money_page_count': pages.filter(is_money_page=True).count(),
+        # GEO Analysis
+        'geo_score': avg_geo_score,
+        'geo_pages_analyzed': len(geo_results),
+        'geo_issues_count': geo_issues_count,
+        'geo_results': geo_results[:10],  # Top 10 for response size
+        'geo_recommendations': _generate_geo_recommendations(geo_results),
     }
+
+
+def _generate_geo_recommendations(geo_results: List[Dict]) -> List[Dict]:
+    """Generate top GEO recommendations from page analysis."""
+    # Aggregate recommendations by type
+    rec_counts = defaultdict(int)
+    rec_examples = defaultdict(list)
+    
+    for result in geo_results:
+        for rec in result.get('recommendations', []):
+            if rec:
+                # Extract check type from recommendation
+                rec_counts[rec] += 1
+                if len(rec_examples[rec]) < 3:
+                    rec_examples[rec].append(result['page_url'])
+    
+    # Sort by frequency
+    sorted_recs = sorted(rec_counts.items(), key=lambda x: -x[1])
+    
+    return [
+        {
+            'recommendation': rec,
+            'affected_pages': count,
+            'example_pages': rec_examples[rec],
+        }
+        for rec, count in sorted_recs[:5]
+    ]
 
 
 def _generate_recommendations(issues: List[Dict]) -> List[Dict]:

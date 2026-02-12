@@ -50,5 +50,7 @@ urlpatterns = [
     path('google/login/', google_login_view, name='google_login'),
     path('google/callback/', google_callback_view, name='google_callback'),
     # API Key verification (for WordPress plugin)
+    # Support both with and without trailing slash for WP plugin compatibility
     path('verify/', verify_view, name='verify'),
+    path('verify', verify_view, name='verify_no_slash'),
 ]

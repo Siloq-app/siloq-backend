@@ -11,8 +11,8 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
-from .models import Site, APIKey
-from .serializers import SiteSerializer, APIKeySerializer, APIKeyCreateSerializer
+from .models import Site, APIKey, AccountKey
+from .serializers import SiteSerializer, APIKeySerializer, APIKeyCreateSerializer, AccountKeySerializer, AccountKeyCreateSerializer
 from .permissions import IsSiteOwner, IsAPIKeyOwner
 from .analysis import analyze_site, detect_cannibalization, calculate_health_score
 
@@ -663,5 +663,81 @@ class APIKeyViewSet(viewsets.ModelViewSet):
         api_key.revoke()
         return Response(
             {'message': 'API key revoked successfully'},
+            status=status.HTTP_200_OK
+        )
+
+
+class AccountKeyViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing Account (Master/Agency) API keys.
+    
+    These keys are tied to the user account, not a specific site.
+    They allow auto-creation of sites on first sync.
+    
+    list: GET /api/v1/account-keys/ - List all account keys for user
+    create: POST /api/v1/account-keys/ - Create a new account key
+    retrieve: GET /api/v1/account-keys/{id}/ - Get account key details
+    destroy: DELETE /api/v1/account-keys/{id}/ - Revoke account key
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Return account keys for the current user."""
+        from .models import AccountKey
+        return AccountKey.objects.filter(user=self.request.user)
+
+    def get_serializer_class(self):
+        """Use different serializer for create vs list/retrieve."""
+        from .serializers import AccountKeySerializer, AccountKeyCreateSerializer
+        if self.action == 'create':
+            return AccountKeyCreateSerializer
+        return AccountKeySerializer
+
+    def create(self, request, *args, **kwargs):
+        """
+        Create a new Account (Master) API key.
+        
+        POST /api/v1/account-keys/
+        Body: { "name": "Agency Master Key" }
+        
+        Returns the full key (only shown once!) along with key metadata.
+        """
+        from .models import AccountKey
+        from .serializers import AccountKeyCreateSerializer
+        
+        # Generate Account key
+        full_key, key_prefix, key_hash = AccountKey.generate_key()
+        
+        # Create Account key record
+        account_key = AccountKey.objects.create(
+            user=request.user,
+            name=request.data.get('name', 'Master Key'),
+            key_hash=key_hash,
+            key_prefix=key_prefix,
+        )
+        
+        serializer = AccountKeyCreateSerializer(account_key)
+        response_data = serializer.data
+        response_data['key'] = full_key
+        
+        return Response({
+            'message': 'Account key created successfully. Save this key - it will only be shown once!',
+            'key': response_data,
+            'capabilities': {
+                'auto_create_sites': True,
+                'unlimited_sites': True,
+            }
+        }, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Revoke an account key.
+        
+        DELETE /api/v1/account-keys/{id}/
+        """
+        account_key = self.get_object()
+        account_key.revoke()
+        return Response(
+            {'message': 'Account key revoked successfully'},
             status=status.HTTP_200_OK
         )

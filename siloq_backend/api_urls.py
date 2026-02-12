@@ -21,8 +21,10 @@ urlpatterns = [
     path('auth/', include('accounts.urls')),
     # WordPress plugin: POST /api/v1/auth/verify with Bearer <api_key>
     path('auth/verify', verify_api_key_view),
-    # API key management
+    # API key management (site-specific keys)
     path('api-keys/', include('sites.api_key_urls')),
+    # Account key management (master/agency keys)
+    path('account-keys/', include('sites.account_key_urls')),
     # Site management
     path('sites/', include('sites.urls')),
     # WordPress integration endpoints (scans, page sync) - MUST be before pages/

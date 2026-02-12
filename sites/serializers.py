@@ -1,8 +1,8 @@
 """
-Serializers for Site and APIKey models.
+Serializers for Site, APIKey, and AccountKey models.
 """
 from rest_framework import serializers
-from .models import Site, APIKey
+from .models import Site, APIKey, AccountKey
 
 
 class SiteSerializer(serializers.ModelSerializer):
@@ -95,3 +95,30 @@ class APIKeyCreateSerializer(serializers.ModelSerializer):
         model = APIKey
         fields = ('id', 'name', 'key', 'key_prefix', 'created_at', 'is_active')
         read_only_fields = ('id', 'key', 'key_prefix', 'created_at', 'is_active')
+
+
+class AccountKeySerializer(serializers.ModelSerializer):
+    """Serializer for AccountKey model (safe - doesn't expose full key)."""
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    
+    class Meta:
+        model = AccountKey
+        fields = (
+            'id', 'name', 'key_prefix', 'is_active',
+            'created_at', 'last_used_at', 'usage_count',
+            'sites_created', 'user_email'
+        )
+        read_only_fields = (
+            'id', 'key_prefix', 'created_at', 'last_used_at',
+            'usage_count', 'sites_created', 'user_email'
+        )
+
+
+class AccountKeyCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating AccountKey (includes full key in response)."""
+    key = serializers.CharField(read_only=True, help_text="Full API key (shown only once)")
+    
+    class Meta:
+        model = AccountKey
+        fields = ('id', 'name', 'key', 'key_prefix', 'created_at', 'is_active', 'sites_created')
+        read_only_fields = ('id', 'key', 'key_prefix', 'created_at', 'is_active', 'sites_created')

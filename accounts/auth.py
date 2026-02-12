@@ -8,7 +8,7 @@ import os
 from dotenv import load_dotenv
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -118,6 +118,7 @@ def me(request):
 
 
 @api_view(['GET', 'POST'])
+@authentication_classes([])  # Skip DRF auth - we handle API key manually
 @permission_classes([AllowAny])
 def verify(request):
     """

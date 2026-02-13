@@ -143,9 +143,19 @@ def _analyze_query_group(query: str, rows: List[Dict]) -> Optional[Dict]:
     query_intent, has_local = classify_query_intent(query)
     is_plural = is_plural_query(query)
     
+    # Sub-type: homepage involvement
+    page_types = [r['page_class'].classified_type for r in rows]
+    if 'homepage' in page_types:
+        # Homepage is splitting impressions with service/product pages
+        conflict_type = 'GSC_HOMEPAGE_SPLIT' if primary['page_class'].classified_type != 'homepage' else 'GSC_HOMEPAGE_HOARDING'
+    elif 'blog' in page_types and any(t in page_types for t in ['category_woo', 'category_shop', 'service_hub', 'service_spoke']):
+        conflict_type = 'GSC_BLOG_VS_CATEGORY'
+    else:
+        conflict_type = 'GSC_CONFIRMED'
+    
     # Build issue
     issue = {
-        'conflict_type': 'GSC_CONFIRMED',
+        'conflict_type': conflict_type,
         'severity': severity,
         'pages': [r['page_class'] for r in rows],
         'metadata': {

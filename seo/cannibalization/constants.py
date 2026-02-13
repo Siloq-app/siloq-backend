@@ -97,7 +97,13 @@ CONFLICT_TYPES = {
         'bucket': 'SEARCH_CONFLICT',
         'badge': 'CONFIRMED',
         'description': 'Homepage ranking instead of dedicated page',
-        'action_code': 'STRENGTHEN_CORRECT_PAGE',
+        'action_code': 'HOMEPAGE_DEOPTIMIZE',
+    },
+    'GSC_HOMEPAGE_SPLIT': {
+        'bucket': 'SEARCH_CONFLICT',
+        'badge': 'CONFIRMED',
+        'description': 'Homepage splitting impressions with service/product page',
+        'action_code': 'HOMEPAGE_DEOPTIMIZE',
     },
     
     # WRONG_WINNER bucket (Phase 5)
@@ -123,7 +129,7 @@ CONFLICT_TYPES = {
         'bucket': 'WRONG_WINNER',
         'badge': 'WRONG_WINNER',
         'description': 'Homepage ranking for specific service query',
-        'action_code': 'STRENGTHEN_CORRECT_PAGE',
+        'action_code': 'HOMEPAGE_DEOPTIMIZE',
     },
 }
 
@@ -179,6 +185,16 @@ ACTION_CODES = {
     'REDIRECT_OR_DIFFERENTIATE': {
         'label': 'Redirect or Differentiate',
         'description': 'Either merge pages or add unique differentiating content.',
+        'requires_user_input': True,
+    },
+    'HOMEPAGE_DEOPTIMIZE': {
+        'label': 'De-optimize Homepage',
+        'description': 'Homepage is cannibalizing a service/product page. De-optimize homepage for the service keyword (strip from title, H1, meta, body). Homepage should only target [Brand] + [broad category]. Then strengthen the correct service page.',
+        'requires_user_input': False,
+    },
+    'SLUG_PIVOT': {
+        'label': 'Slug Pivot + Differentiate',
+        'description': 'Competing pages have high slug similarity (Jaccard > 0.6). Differentiate content AND recommend URL slug change to reinforce the new keyword angle. Old slug gets 301 to new slug.',
         'requires_user_input': True,
     },
 }

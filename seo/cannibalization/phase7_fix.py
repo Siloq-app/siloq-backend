@@ -136,6 +136,38 @@ def _generate_redirects(cluster: Dict) -> List[Dict]:
                         'reason': 'GSC winner (most clicks)',
                     })
     
+    # HOMEPAGE_DEOPTIMIZE: No redirects — de-optimize homepage, strengthen service page
+    elif action_code == 'HOMEPAGE_DEOPTIMIZE':
+        # Find the homepage and service pages
+        homepage = None
+        service_pages = []
+        for page in pages:
+            if page.classified_type == 'homepage':
+                homepage = page
+            else:
+                service_pages.append(page)
+        
+        if homepage and service_pages:
+            # No redirect — but generate de-optimization plan
+            redirects.append({
+                'source_url': homepage.url,
+                'target_url': service_pages[0].url,
+                'confidence': 'high',
+                'reason': 'DEOPTIMIZE homepage for service keyword. Strip keyword from title tag, H1, meta description, and body content. Homepage should target only [Brand Name] + [broad category]. Strengthen service page with internal links from homepage.',
+            })
+    
+    # SLUG_PIVOT: Recommend URL change + 301 from old to new
+    elif action_code == 'SLUG_PIVOT':
+        # The spoke page needs a slug change to reinforce its new keyword angle
+        # Actual slug recommendation comes from AI spoke_rewrite
+        for page in pages[1:]:  # Skip the hub (pages[0])
+            redirects.append({
+                'source_url': page.url,
+                'target_url': f'{page.url} → [AI-recommended new slug]',
+                'confidence': 'medium',
+                'reason': 'Slug pivot: URL tokens overlap with hub. Spoke rewrite will recommend new slug that reinforces the differentiated keyword angle. Old URL gets 301 to new.',
+            })
+    
     # WRONG_WINNER types: No redirects, just strengthen correct page
     # LOCATION_BOILERPLATE: No redirects, rewrite content
     # CONTEXT_DUPLICATE: User must decide merge vs differentiate

@@ -202,7 +202,22 @@ def _detect_near_duplicates(
                     'pages': [page_a, page_b],
                     'metadata': {
                         'similarity_score': round(similarity, 2),
+                        'slug_pivot_needed': True,
                     },
+                    'action_code': 'SLUG_PIVOT',
+                })
+            elif similarity > 0.60:
+                # High slug overlap — URL tokens are sending competing signals
+                # Content differentiation alone won't work; slug must pivot too
+                issues.append({
+                    'conflict_type': 'NEAR_DUPLICATE_CONTENT',
+                    'severity': 'LOW',
+                    'pages': [page_a, page_b],
+                    'metadata': {
+                        'similarity_score': round(similarity, 2),
+                        'slug_pivot_needed': True,
+                    },
+                    'action_code': 'SLUG_PIVOT',
                 })
     
     return issues

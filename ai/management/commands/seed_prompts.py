@@ -56,6 +56,30 @@ more internal links), those backlinks transfer via the 301 redirect.
 stuffed.
 - Every H2 should target a specific sub-intent or related query.
 
+## HOMEPAGE RULE (CRITICAL)
+When the homepage is one of the conflicting pages, NEVER merge content
+into the homepage. NEVER recommend the homepage as the hub for a service
+or product keyword. The homepage is a BRAND PAGE and a ROUTING PAGE only.
+
+When homepage cannibalization is detected:
+1. PRIMARY ACTION: De-optimize the homepage for the service/product
+keyword. Specifically recommend removing the keyword from:
+- Title tag (should be "[Brand Name] | [Broad Category Descriptor]")
+- H1 (should be brand-focused, not service-specific)
+- Meta description (brand + value prop, not service keyword targeting)
+- Any body content that's over-optimized for the service term
+2. SECONDARY ACTION: Strengthen the correct service/product page with
+internal links FROM the homepage, better on-page optimization, and
+more topical depth.
+3. The homepage should funnel authority to category/service pages through
+internal links, not compete with them.
+4. Include a "homepage_deoptimization" object in your response with
+specific elements to change on the homepage.
+
+The homepage has too much inherent authority. You cannot out-strengthen a
+page that's cannibalizing from the homepage — you must de-optimize the
+homepage first, THEN strengthen the service page.
+
 ## OUTPUT FORMAT
 Respond with ONLY valid JSON matching this exact structure:
 {
@@ -92,7 +116,19 @@ Respond with ONLY valid JSON matching this exact structure:
     "estimated_new_position": "2-3",
     "estimated_click_recovery": 180,
     "rationale": "Why you expect this improvement (1-2 sentences)"
-  }
+  },
+  "homepage_deoptimization": null,
+  // ONLY include this object when the homepage is involved in the conflict:
+  // "homepage_deoptimization": {
+  //   "current_title": "Current homepage title tag",
+  //   "recommended_title": "[Brand Name] | [Broad Category]",
+  //   "current_h1": "Current homepage H1",
+  //   "recommended_h1": "Brand-focused H1",
+  //   "current_meta": "Current meta description",
+  //   "recommended_meta": "Brand + value prop meta (no service keywords)",
+  //   "body_content_to_remove": ["List of specific keyword-targeted sections to remove or rewrite"],
+  //   "internal_links_to_add": ["Service page URLs that homepage should link to"]
+  // }
 }
 
 Do not include any text outside the JSON object.""",
@@ -153,7 +189,30 @@ target. Do not change the hub.
 - Spoke content should be 800-1,500 words. Spokes are supporting
   content, not competing hubs.
 - PRESERVE any unique backlinks or authority the spoke page has.
-  The rewrite maintains the same URL.
+
+## SLUG PIVOT RULE (CRITICAL)
+When recommending a keyword pivot for a page whose URL slug contains
+tokens from the OLD keyword, you MUST also recommend a slug change
+that aligns with the NEW keyword. The old slug sends a ranking signal
+to Google that contradicts the content pivot. Both must change together
+for the differentiation to work.
+
+Example: If pivoting /sequin-evening-dresses/ away from "sequin dresses"
+to focus on "formal event gowns", recommend changing the slug to
+/formal-sequin-gowns/. The old URL gets a 301 redirect to the new one.
+
+Include a `url_change` object for any spoke where the current slug
+tokens overlap significantly with the hub's keyword. If the slug is
+already differentiated, set `url_change` to null.
+
+## HOMEPAGE RULE (CRITICAL)
+When the homepage is one of the conflicting pages, NEVER choose the
+homepage as a spoke to rewrite. Instead:
+1. De-optimize the homepage for the service keyword (strip from title,
+   H1, meta, body content)
+2. The homepage should only target "[Brand Name] + [broad category]"
+3. Include a "homepage_deoptimization" object (same as merge plan format)
+4. All other competing pages become spokes of the correct service page hub
 
 ## OUTPUT FORMAT
 Respond with ONLY valid JSON matching this exact structure:
@@ -175,6 +234,13 @@ Respond with ONLY valid JSON matching this exact structure:
         "from": "current competing keyword",
         "to": "new differentiated keyword"
       },
+      "url_change": {
+        "old_slug": "/current-slug/",
+        "new_slug": "/new-slug-matching-keyword-pivot/",
+        "rationale": "Why the slug must change to reinforce the pivot",
+        "301_redirect": true
+      },
+      // Set url_change to null if current slug doesn't conflict with hub keyword
       "h2_structure": [
         {
           "h2": "Section Heading",

@@ -31,29 +31,22 @@ def _build_user_message(context_payload: dict, action: str) -> str:
 
 def call_ai(system_prompt: str, context_payload: dict, action: str) -> dict:
     """
-    Call AI provider. Try Claude first, fall back to OpenAI.
+    Call AI provider. OpenAI is the primary (and currently only) provider.
+    Future: customers can BYOK Claude/Gemini/OpenAI for content creation.
     Returns tuple: (parsed_response_dict, provider_name, model_name)
     """
     user_message = _build_user_message(context_payload, action)
 
-    # Try Claude first
-    anthropic_key = os.getenv('ANTHROPIC_API_KEY')
-    if anthropic_key:
-        try:
-            return _call_claude(anthropic_key, system_prompt, user_message)
-        except Exception as e:
-            logger.warning(f"Claude call failed, falling back to OpenAI: {e}")
-
-    # Fallback to OpenAI
+    # OpenAI — primary provider
     openai_key = os.getenv('OPENAI_API_KEY')
     if openai_key:
         try:
             return _call_openai(openai_key, system_prompt, user_message)
         except Exception as e:
-            logger.error(f"OpenAI call also failed: {e}")
+            logger.error(f"OpenAI call failed: {e}")
             raise
 
-    raise RuntimeError("No AI provider configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.")
+    raise RuntimeError("No AI provider configured. Set OPENAI_API_KEY.")
 
 
 def call_ai_with_retry(system_prompt: str, context_payload: dict, action: str,

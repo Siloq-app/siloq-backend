@@ -195,3 +195,32 @@ CORS_ALLOW_CREDENTIALS = True
 
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.User'
+
+# Logging - ensure all output goes to stdout for DigitalOcean App Platform
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{levelname}] {name}: {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'integrations': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+    },
+}

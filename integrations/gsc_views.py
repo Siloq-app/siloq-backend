@@ -121,11 +121,13 @@ def oauth_callback(request):
         'redirect_uri': GSC_REDIRECT_URI,
     }
     
+    print(f"[GSC] Exchanging code for tokens. site_id={site_id}, user_id={user_id}, redirect_uri={GSC_REDIRECT_URI}", flush=True)
     logger.info(f"GSC OAuth: exchanging code for tokens. site_id={site_id}, user_id={user_id}, redirect_uri={GSC_REDIRECT_URI}")
     
     token_response = requests.post(GOOGLE_TOKEN_URL, data=token_data)
     
     if token_response.status_code != 200:
+        print(f"[GSC] Token exchange FAILED (HTTP {token_response.status_code}): {token_response.text}", flush=True)
         logger.error(f"GSC token exchange failed (HTTP {token_response.status_code}): {token_response.text}")
         error_detail = token_response.json().get('error_description', 'token_exchange_failed') if token_response.text else 'token_exchange_failed'
         return redirect(f"{settings.FRONTEND_URL}/dashboard?gsc_error=token_exchange_failed&detail={quote(error_detail)}")
@@ -135,6 +137,7 @@ def oauth_callback(request):
     refresh_token = tokens.get('refresh_token')
     expires_in = tokens.get('expires_in', 3600)
     
+    print(f"[GSC] Tokens received. has_access={bool(access_token)}, has_refresh={bool(refresh_token)}", flush=True)
     logger.info(f"GSC OAuth: tokens received. has_access={bool(access_token)}, has_refresh={bool(refresh_token)}")
     
     if not refresh_token:
@@ -172,11 +175,16 @@ def oauth_callback(request):
                     logger.warning(f"GSC OAuth: failed to auto-detect site URL: {e}")
             
             site.save()
+            print(f"[GSC] SUCCESS: saved tokens for site {site_id}. gsc_site_url={site.gsc_site_url}", flush=True)
             logger.info(f"GSC OAuth: saved tokens for site {site_id}. gsc_site_url={site.gsc_site_url}")
             return redirect(f"{settings.FRONTEND_URL}/dashboard?gsc_connected=true&site_id={site_id}")
         except Site.DoesNotExist:
+            print(f"[GSC] ERROR: Site {site_id} not found for user {user_id}", flush=True)
             logger.error(f"GSC OAuth: Site {site_id} not found for user {user_id}")
             return redirect(f"{settings.FRONTEND_URL}/dashboard?gsc_error=site_not_found")
+        except Exception as e:
+            print(f"[GSC] ERROR saving tokens: {e}", flush=True)
+            return redirect(f"{settings.FRONTEND_URL}/dashboard?gsc_error=save_failed")
     
     # No site_id — redirect to site picker with temporary token
     return redirect(f"{settings.FRONTEND_URL}/dashboard/gsc-connect?access_token={access_token}")

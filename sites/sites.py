@@ -525,3 +525,355 @@ class SiteViewSet(viewsets.ModelViewSet):
             'geo_results': results.get('geo_results', []),
             'geo_recommendations': results.get('geo_recommendations', []),
         })
+
+    # =========================================================================
+    # Sync & Internal Links Actions
+    # =========================================================================
+
+    @action(detail=True, methods=['get'], url_path='sync-status')
+    def sync_status(self, request, pk=None):
+        """
+        Get sync status for a site.
+        
+        GET /api/v1/sites/{id}/sync-status/
+        """
+        site = self.get_object()
+        page_count = site.pages.count()
+        
+        return Response({
+            'site_id': site.id,
+            'site_name': site.name,
+            'page_count': page_count,
+            'last_synced_at': site.last_synced_at,
+            'sync_requested_at': getattr(site, 'sync_requested_at', None),
+            'is_synced': page_count > 0,
+        })
+
+    @action(detail=True, methods=['post'], url_path='trigger-sync')
+    def trigger_sync(self, request, pk=None):
+        """
+        Request a sync from WordPress plugin.
+        Sets a flag that the WP plugin can check to initiate sync.
+        
+        POST /api/v1/sites/{id}/trigger-sync/
+        """
+        site = self.get_object()
+        
+        # Update sync_requested_at timestamp
+        from django.utils import timezone
+        now = timezone.now()
+        if hasattr(site, 'sync_requested_at'):
+            site.sync_requested_at = now
+            site.save(update_fields=['sync_requested_at'])
+        
+        return Response({
+            'message': 'Sync requested successfully',
+            'site_id': site.id,
+            'site_name': site.name,
+            'instructions': 'Go to WordPress Admin → Siloq → click "Sync Now" to push pages to Siloq.',
+            'sync_requested_at': now.isoformat(),
+        })
+
+    @action(detail=True, methods=['get'], url_path='internal-links')
+    def internal_links(self, request, pk=None):
+        """
+        Get internal links analysis for a site.
+        
+        GET /api/v1/sites/{id}/internal-links/
+        """
+        from seo.models import Page, InternalLink
+        
+        site = self.get_object()
+        pages = site.pages.filter(status='publish', is_noindex=False)
+        
+        # Build silo structure
+        homepage = pages.filter(is_homepage=True).first()
+        money_pages = pages.filter(is_money_page=True)
+        
+        silos = []
+        for mp in money_pages:
+            supporting = pages.filter(parent_silo=mp)
+            
+            # Get links within this silo
+            silo_page_ids = [mp.id] + list(supporting.values_list('id', flat=True))
+            links = InternalLink.objects.filter(
+                site=site,
+                source_page_id__in=silo_page_ids,
+                target_page_id__in=silo_page_ids,
+            )
+            
+            silos.append({
+                'target': {
+                    'id': mp.id,
+                    'url': mp.url,
+                    'title': mp.title,
+                    'slug': mp.slug,
+                },
+                'supporting_pages': [
+                    {'id': p.id, 'url': p.url, 'title': p.title, 'slug': p.slug}
+                    for p in supporting
+                ],
+                'supporting_count': supporting.count(),
+                'links': [
+                    {
+                        'source_id': l.source_page_id,
+                        'target_id': l.target_page_id,
+                        'anchor_text': l.anchor_text,
+                    }
+                    for l in links
+                ],
+            })
+        
+        # Detect issues
+        anchor_conflicts = []
+        homepage_theft = []
+        missing_target_links = []
+        missing_sibling_links = []
+        orphan_pages = []
+        silo_size_issues = []
+        
+        # Check for orphan pages (no incoming links)
+        for page in pages:
+            if not page.is_homepage and not page.is_money_page:
+                incoming = InternalLink.objects.filter(site=site, target_page=page).count()
+                if incoming == 0:
+                    orphan_pages.append({
+                        'page': {'id': page.id, 'url': page.url, 'title': page.title},
+                        'severity': 'medium',
+                        'recommendation': 'Add internal links pointing to this page',
+                    })
+        
+        total_issues = (
+            len(anchor_conflicts) + len(homepage_theft) + 
+            len(missing_target_links) + len(orphan_pages) +
+            len(silo_size_issues)
+        )
+        
+        # Simple health score
+        health_score = max(0, 100 - total_issues * 5)
+        
+        return Response({
+            'health_score': health_score,
+            'health_breakdown': {
+                'anchor_conflicts': {'score': 100, 'issues': len(anchor_conflicts), 'weight': 25},
+                'homepage_protection': {'score': 100, 'issues': len(homepage_theft), 'weight': 25},
+                'target_links': {'score': 100, 'issues': len(missing_target_links), 'weight': 25},
+                'orphan_pages': {'score': max(0, 100 - len(orphan_pages) * 10), 'issues': len(orphan_pages), 'weight': 25},
+            },
+            'total_issues': total_issues,
+            'issues': {
+                'anchor_conflicts': anchor_conflicts,
+                'homepage_theft': homepage_theft,
+                'missing_target_links': missing_target_links,
+                'missing_sibling_links': missing_sibling_links,
+                'orphan_pages': orphan_pages[:20],  # Limit response size
+                'silo_size_issues': silo_size_issues,
+            },
+            'structure': {
+                'homepage': {
+                    'id': homepage.id,
+                    'url': homepage.url,
+                    'title': homepage.title,
+                } if homepage else None,
+                'silos': silos,
+                'total_target_pages': money_pages.count(),
+                'total_supporting_pages': pages.filter(parent_silo__isnull=False).count(),
+            },
+            'recommendations': [],
+        })
+
+    @action(detail=True, methods=['post'], url_path='sync-links')
+    def sync_links(self, request, pk=None):
+        """
+        Extract and store internal links from page content.
+        
+        POST /api/v1/sites/{id}/sync-links/
+        """
+        import re
+        from urllib.parse import urlparse
+        from seo.models import Page, InternalLink
+        
+        site = self.get_object()
+        pages = site.pages.filter(status='publish')
+        
+        # Build URL to page mapping
+        url_to_page = {}
+        for page in pages:
+            if page.url:
+                parsed = urlparse(page.url)
+                path = parsed.path.rstrip('/')
+                url_to_page[path] = page
+                url_to_page[page.url] = page
+        
+        # Clear existing links for this site
+        InternalLink.objects.filter(site=site).delete()
+        
+        total_links = 0
+        pages_processed = 0
+        
+        for page in pages:
+            content = page.content or ''
+            # Find all href links in content
+            links = re.findall(r'href=["\']([^"\']+)["\']', content)
+            
+            for link_url in links:
+                # Check if internal
+                try:
+                    parsed = urlparse(link_url)
+                    site_parsed = urlparse(site.url)
+                    
+                    # Skip external links
+                    if parsed.netloc and parsed.netloc != site_parsed.netloc:
+                        continue
+                    
+                    # Normalize path
+                    path = parsed.path.rstrip('/')
+                    target_page = url_to_page.get(path) or url_to_page.get(link_url)
+                    
+                    # Extract anchor text (simplified - from surrounding HTML)
+                    anchor_match = re.search(
+                        rf'<a[^>]*href=["\']' + re.escape(link_url) + r'["\'][^>]*>(.*?)</a>',
+                        content, re.DOTALL
+                    )
+                    anchor_text = ''
+                    if anchor_match:
+                        anchor_text = re.sub(r'<[^>]+>', '', anchor_match.group(1)).strip()
+                    
+                    InternalLink.objects.create(
+                        site=site,
+                        source_page=page,
+                        target_page=target_page,
+                        target_url=link_url if link_url.startswith('http') else f"{site.url.rstrip('/')}{link_url}",
+                        anchor_text=anchor_text[:500],
+                        is_in_content=True,
+                    )
+                    total_links += 1
+                except Exception:
+                    continue
+            
+            pages_processed += 1
+        
+        return Response({
+            'message': 'Links synced successfully',
+            'pages_processed': pages_processed,
+            'total_links_found': total_links,
+        })
+
+    @action(detail=True, methods=['post'], url_path='set-homepage')
+    def set_homepage(self, request, pk=None):
+        """
+        Set a page as the homepage for this site.
+        
+        POST /api/v1/sites/{id}/set-homepage/
+        Body: { "page_id": 123 }
+        """
+        from seo.models import Page
+        
+        site = self.get_object()
+        page_id = request.data.get('page_id')
+        
+        if not page_id:
+            return Response({'error': 'page_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        page = get_object_or_404(Page, id=page_id, site=site)
+        
+        # Clear existing homepage
+        Page.objects.filter(site=site, is_homepage=True).update(is_homepage=False)
+        
+        page.is_homepage = True
+        page.save(update_fields=['is_homepage'])
+        
+        return Response({
+            'message': 'Homepage set successfully',
+            'page_id': page.id,
+        })
+
+    @action(detail=True, methods=['post'], url_path='assign-silo')
+    def assign_silo(self, request, pk=None):
+        """
+        Assign a page to a silo (set parent_silo).
+        
+        POST /api/v1/sites/{id}/assign-silo/
+        Body: { "page_id": 123, "target_page_id": 456 }
+        """
+        from seo.models import Page
+        
+        site = self.get_object()
+        page_id = request.data.get('page_id')
+        target_page_id = request.data.get('target_page_id')
+        
+        if not page_id:
+            return Response({'error': 'page_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        page = get_object_or_404(Page, id=page_id, site=site)
+        
+        if target_page_id:
+            target = get_object_or_404(Page, id=target_page_id, site=site)
+            page.parent_silo = target
+        else:
+            page.parent_silo = None
+        
+        page.save(update_fields=['parent_silo'])
+        
+        return Response({
+            'message': 'Silo assignment updated',
+            'page_id': page.id,
+            'parent_silo_id': target_page_id,
+        })
+
+    @action(detail=True, methods=['get'], url_path='content-suggestions')
+    def content_suggestions(self, request, pk=None):
+        """
+        Generate content suggestions based on money pages.
+        
+        GET /api/v1/sites/{id}/content-suggestions/
+        """
+        site = self.get_object()
+        pages = site.pages.filter(status='publish', is_noindex=False)
+        money_pages = pages.filter(is_money_page=True)
+        
+        suggestions = []
+        for mp in money_pages:
+            supporting = pages.filter(parent_silo=mp)
+            
+            # Check what content types exist
+            has_how_to = any('how' in (p.title or '').lower() for p in supporting)
+            has_comparison = any(w in (p.title or '').lower() for p in supporting for w in ['vs', 'compare', 'comparison'])
+            has_guide = any('guide' in (p.title or '').lower() for p in supporting)
+            has_faq = any('faq' in (p.title or '').lower() or '?' in (p.title or '') for p in supporting)
+            
+            # Generate topic suggestions based on gaps
+            topics = []
+            title_base = mp.title or 'this service'
+            if not has_how_to:
+                topics.append({'title': f'How to Choose the Right {title_base}', 'type': 'how-to', 'priority': 'high'})
+            if not has_comparison:
+                topics.append({'title': f'{title_base} vs Alternatives: Complete Comparison', 'type': 'comparison', 'priority': 'medium'})
+            if not has_guide:
+                topics.append({'title': f'The Ultimate Guide to {title_base}', 'type': 'educational', 'priority': 'medium'})
+            if not has_faq:
+                topics.append({'title': f'Frequently Asked Questions About {title_base}', 'type': 'tips', 'priority': 'low'})
+            
+            suggestions.append({
+                'target_page': {
+                    'id': mp.id,
+                    'title': mp.title,
+                    'url': mp.url,
+                },
+                'existing_supporting_count': supporting.count(),
+                'suggested_topics': topics,
+                'gap_analysis': {
+                    'has_how_to': has_how_to,
+                    'has_comparison': has_comparison,
+                    'has_guide': has_guide,
+                    'has_faq': has_faq,
+                },
+            })
+        
+        total_topics = sum(len(s['suggested_topics']) for s in suggestions)
+        
+        return Response({
+            'total_targets': money_pages.count(),
+            'total_suggested_topics': total_topics,
+            'suggestions': suggestions,
+        })

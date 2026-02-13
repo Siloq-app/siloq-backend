@@ -215,13 +215,17 @@ def detect_static_cannibalization(pages, include_noindex: bool = False) -> List[
         for kw in data['keywords']:
             keyword_to_pages[kw].add(pid)
     
-    # Build candidate pairs (pages that share keywords)
-    candidate_pairs = set()
+    # Build candidate pairs - require at least 2 shared keywords
+    # Single word overlap (e.g. "dance") creates massive false positives
+    pair_shared_count = defaultdict(int)
     for kw, pids in keyword_to_pages.items():
         pid_list = sorted(pids)
         for i in range(len(pid_list)):
             for j in range(i + 1, len(pid_list)):
-                candidate_pairs.add((pid_list[i], pid_list[j]))
+                pair_shared_count[(pid_list[i], pid_list[j])] += 1
+    
+    # Only consider pairs with 2+ shared keywords
+    candidate_pairs = {pair for pair, count in pair_shared_count.items() if count >= 2}
     
     # Check only candidate pairs
     for id_a, id_b in candidate_pairs:
@@ -254,12 +258,18 @@ def _check_pair_conflict(data_a: Dict, data_b: Dict) -> Optional[Dict]:
     
     # =========================================================================
     # RULE 1: Listicle Blog vs Category (HIGH - E-commerce)
+    # Requires meaningful keyword phrase overlap, not just a single generic word
     # =========================================================================
     if (data_a['is_listicle'] and type_b == 'category') or \
        (data_b['is_listicle'] and type_a == 'category'):
         
         blog_data = data_a if data_a['is_listicle'] else data_b
         cat_data = data_b if data_a['is_listicle'] else data_a
+        
+        # Must share at least 2 meaningful keywords to be a real conflict
+        # "dance" alone matching a dance jacket blog and a dance team category is NOT cannibalization
+        if len(overlap) < 2:
+            return None
         
         return {
             'type': 'listicle_vs_category',
@@ -277,7 +287,7 @@ def _check_pair_conflict(data_a: Dict, data_b: Dict) -> Optional[Dict]:
     # =========================================================================
     # RULE 2: Multiple Listicle Blogs (HIGH - Merge)
     # =========================================================================
-    if data_a['is_listicle'] and data_b['is_listicle'] and overlap_ratio > 0.3:
+    if data_a['is_listicle'] and data_b['is_listicle'] and overlap_ratio > 0.3 and len(overlap) >= 2:
         return {
             'type': 'listicle_vs_listicle',
             'severity': 'HIGH',
@@ -370,12 +380,13 @@ def _check_pair_conflict(data_a: Dict, data_b: Dict) -> Optional[Dict]:
     # SAFE PATTERNS - DO NOT FLAG
     # =========================================================================
     
-    # Category + Product = SAFE (different intents)
+    # Category + Product = SAFE (different intents: browse vs buy)
     if {type_a, type_b} == {'category', 'product'}:
         return None
     
-    # Team + Product = SAFE (parent-child)
-    if {type_a, type_b} == {'team', 'product'}:
+    # Team pages are organizational/navigational - SAFE with everything
+    # Teams are specific organizations (e.g. "Starlight Dance Center"), not SEO targets
+    if type_a == 'team' or type_b == 'team':
         return None
     
     # Service + Location = SAFE (should cross-link)

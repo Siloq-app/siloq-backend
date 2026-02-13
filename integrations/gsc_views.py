@@ -121,34 +121,64 @@ def oauth_callback(request):
         'redirect_uri': GSC_REDIRECT_URI,
     }
     
+    logger.info(f"GSC OAuth: exchanging code for tokens. site_id={site_id}, user_id={user_id}, redirect_uri={GSC_REDIRECT_URI}")
+    
     token_response = requests.post(GOOGLE_TOKEN_URL, data=token_data)
     
     if token_response.status_code != 200:
-        logger.error(f"Token exchange failed: {token_response.text}")
-        return redirect(f"{settings.FRONTEND_URL}/dashboard?gsc_error=token_exchange_failed")
+        logger.error(f"GSC token exchange failed (HTTP {token_response.status_code}): {token_response.text}")
+        error_detail = token_response.json().get('error_description', 'token_exchange_failed') if token_response.text else 'token_exchange_failed'
+        return redirect(f"{settings.FRONTEND_URL}/dashboard?gsc_error=token_exchange_failed&detail={quote(error_detail)}")
     
     tokens = token_response.json()
     access_token = tokens.get('access_token')
     refresh_token = tokens.get('refresh_token')
     expires_in = tokens.get('expires_in', 3600)
     
-    # Store tokens on user (temporary storage until they pick a site)
-    # We'll store in session or a temporary model
-    # For now, redirect with tokens in a secure way
+    logger.info(f"GSC OAuth: tokens received. has_access={bool(access_token)}, has_refresh={bool(refresh_token)}")
     
-    # If site_id provided, store directly on site
+    if not refresh_token:
+        logger.warning("GSC OAuth: No refresh token received. User may need to re-authorize with prompt=consent.")
+    
+    # If site_id provided, store tokens and auto-detect GSC site URL
     if site_id:
         try:
             site = Site.objects.get(id=site_id, user_id=user_id)
             site.gsc_access_token = access_token
-            site.gsc_refresh_token = refresh_token
+            if refresh_token:
+                site.gsc_refresh_token = refresh_token
             site.gsc_token_expires_at = timezone.now() + timedelta(seconds=expires_in)
+            site.gsc_connected_at = timezone.now()
+            
+            # Auto-detect the matching GSC site URL from user's properties
+            if access_token and site.url:
+                try:
+                    headers = {'Authorization': f'Bearer {access_token}'}
+                    gsc_resp = requests.get(f'{GSC_API_BASE}/sites', headers=headers, timeout=10)
+                    if gsc_resp.status_code == 200:
+                        gsc_sites = gsc_resp.json().get('siteEntry', [])
+                        site_domain = site.url.lower().replace('https://', '').replace('http://', '').replace('www.', '').rstrip('/')
+                        for gs in gsc_sites:
+                            gs_url = gs.get('siteUrl', '').lower().replace('www.', '')
+                            if site_domain in gs_url or gs_url.rstrip('/').endswith(site_domain):
+                                site.gsc_site_url = gs['siteUrl']
+                                logger.info(f"GSC OAuth: auto-matched site URL: {gs['siteUrl']}")
+                                break
+                        if not site.gsc_site_url and gsc_sites:
+                            # Fallback: use first available GSC property
+                            site.gsc_site_url = gsc_sites[0]['siteUrl']
+                            logger.info(f"GSC OAuth: no exact match, using first property: {site.gsc_site_url}")
+                except Exception as e:
+                    logger.warning(f"GSC OAuth: failed to auto-detect site URL: {e}")
+            
             site.save()
+            logger.info(f"GSC OAuth: saved tokens for site {site_id}. gsc_site_url={site.gsc_site_url}")
             return redirect(f"{settings.FRONTEND_URL}/dashboard?gsc_connected=true&site_id={site_id}")
         except Site.DoesNotExist:
-            pass
+            logger.error(f"GSC OAuth: Site {site_id} not found for user {user_id}")
+            return redirect(f"{settings.FRONTEND_URL}/dashboard?gsc_error=site_not_found")
     
-    # Redirect to site picker with temporary token
+    # No site_id — redirect to site picker with temporary token
     return redirect(f"{settings.FRONTEND_URL}/dashboard/gsc-connect?access_token={access_token}")
 
 

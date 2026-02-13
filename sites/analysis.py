@@ -236,6 +236,12 @@ def detect_static_cannibalization(pages, include_noindex: bool = False) -> List[
         if issue:
             issues.append(issue)
     
+    # Tag all static issues as "potential" - not GSC validated
+    for issue in issues:
+        issue['validation_status'] = 'potential'
+        issue['validation_source'] = 'url_pattern'
+        issue['gsc_data'] = None
+    
     # Sort by severity
     severity_order = {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}
     issues.sort(key=lambda x: severity_order.get(x['severity'], 3))
@@ -445,6 +451,9 @@ def analyze_gsc_data(gsc_data: List[Dict]) -> List[Dict[str, Any]]:
         if total_imps == 0:
             continue
         
+        # Include ALL pages in cluster, not just top 2
+        all_pages_in_cluster = rows[:]
+        
         # Top 2 contenders
         leader = rows[0]
         challenger = rows[1]
@@ -452,8 +461,9 @@ def analyze_gsc_data(gsc_data: List[Dict]) -> List[Dict[str, Any]]:
         leader_share = leader.get('impressions', 0) / total_imps
         challenger_share = challenger.get('impressions', 0) / total_imps
         
-        # If leader has >90% share, Google has decided - skip
-        if leader_share > 0.9:
+        # If leader has >85% share, Google has decided - skip
+        # (Changed from 90% to 85% per v2 spec)
+        if leader_share > 0.85:
             continue
         
         # Classify pages and query
@@ -469,11 +479,30 @@ def analyze_gsc_data(gsc_data: List[Dict]) -> List[Dict[str, Any]]:
         )
         
         if issue:
+            # Tag all GSC issues as validated
+            issue['validation_status'] = 'gsc_validated'
+            issue['validation_source'] = 'google_search_console'
+            issue['gsc_data'] = {
+                'total_impressions': total_imps,
+                'pages_in_cluster': len(all_pages_in_cluster),
+                'all_competing_pages': [
+                    {
+                        'url': r.get('page_url', r.get('page', '')),
+                        'clicks': r.get('clicks', 0),
+                        'impressions': r.get('impressions', 0),
+                        'position': round(r.get('position', 0), 1),
+                        'share': f"{int(r.get('impressions', 0) / total_imps * 100)}%",
+                    }
+                    for r in all_pages_in_cluster
+                ],
+            }
             issues.append(issue)
     
-    # Sort by severity
-    severity_order = {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}
-    issues.sort(key=lambda x: severity_order.get(x['severity'], 3))
+    # Sort: GSC-validated first, then by total impressions descending
+    def sort_key(x):
+        imps = x.get('gsc_data', {}).get('total_impressions', 0) if x.get('gsc_data') else 0
+        return (-imps,)
+    issues.sort(key=sort_key)
     
     return issues[:50]
 
@@ -895,6 +924,8 @@ def analyze_site(site) -> Dict[str, Any]:
     avg_geo_score = round(sum(g['geo_score'] for g in geo_results) / len(geo_results)) if geo_results else 0
     geo_issues_count = sum(1 for g in geo_results if g['geo_score'] < 60)
     
+    gsc_connected = bool(getattr(site, 'gsc_refresh_token', None))
+    
     return {
         'site_id': site.id,
         'analyzed_at': timezone.now().isoformat(),
@@ -903,6 +934,7 @@ def analyze_site(site) -> Dict[str, Any]:
         'health_breakdown': health['breakdown'],
         'cannibalization_issues': issues,
         'cannibalization_count': len(issues),
+        'gsc_connected': gsc_connected,
         'high_severity_count': high_count,
         'medium_severity_count': medium_count,
         'recommendations': _generate_recommendations(issues),

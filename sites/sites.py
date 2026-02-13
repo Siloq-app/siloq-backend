@@ -155,11 +155,18 @@ class SiteViewSet(viewsets.ModelViewSet):
         Get all cannibalization issues for a site.
         
         GET /api/v1/sites/{id}/cannibalization-issues/
+        
+        Each issue includes:
+        - validation_status: 'gsc_validated' or 'potential'
+        - gsc_data: impression/click data if GSC connected, null otherwise
         """
         site = self.get_object()
         pages = site.pages.all().prefetch_related('seo_data')
         
-        # Detect cannibalization
+        # Check if GSC is connected
+        gsc_connected = bool(getattr(site, 'gsc_refresh_token', None))
+        
+        # Detect cannibalization (static analysis)
         issues = detect_cannibalization(pages)
         
         # Format for API response
@@ -167,17 +174,25 @@ class SiteViewSet(viewsets.ModelViewSet):
         for i, issue in enumerate(issues):
             formatted_issues.append({
                 'id': i + 1,
+                'type': issue.get('type', 'unknown'),
                 'keyword': issue.get('keyword', ''),
                 'severity': issue.get('severity', 'LOW').lower(),
+                'explanation': issue.get('explanation', ''),
                 'recommendation_type': issue.get('recommendation_type') or issue.get('type', 'review'),
                 'recommendation': issue.get('recommendation', ''),
                 'total_impressions': issue.get('total_impressions', 0),
+                'validation_status': issue.get('validation_status', 'potential'),
+                'validation_source': issue.get('validation_source', 'url_pattern'),
+                'gsc_data': issue.get('gsc_data', None),
                 'competing_pages': [
                     {
                         'id': p.get('id'),
                         'url': p.get('url', ''),
                         'title': p.get('title', ''),
-                        'impression_share': p.get('impression_share'),
+                        'page_type': p.get('page_type', ''),
+                        'impression_share': p.get('impression_share') or p.get('share'),
+                        'clicks': p.get('clicks'),
+                        'position': p.get('position'),
                     }
                     for p in issue.get('competing_pages', [])
                 ],
@@ -191,6 +206,7 @@ class SiteViewSet(viewsets.ModelViewSet):
         return Response({
             'issues': formatted_issues,
             'total': len(formatted_issues),
+            'gsc_connected': gsc_connected,
         })
 
     @action(detail=True, methods=['get'], url_path='health-summary')

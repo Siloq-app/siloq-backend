@@ -75,8 +75,8 @@ def classify_page_type(url: str, post_type: str = None) -> str:
     patterns = {
         'listicle_blog': LISTICLE_PATTERNS,
         'blog': [r'/blog/', r'/news/', r'/articles/', r'/post/', r'/posts/', r'\d{4}/\d{2}/'],
-        'product': [r'/product/', r'/products/', r'/item/', r'/p/', r'/shop/[^/]+/[^/]+'],
-        'category': [r'/product-category/', r'/category/', r'/collection/', r'/c/', r'/shop/$'],
+        'product': [r'/product/', r'/products/', r'/item/', r'/p/', r'/shop/[^/]+/[^/]+/?$'],
+        'category': [r'/product-category/', r'/category/', r'/collection/', r'/c/', r'/shop/[^/]+/?$', r'/product-rentals/[^/]+/?$'],
         'service': [r'/service/', r'/services/', r'/residential/', r'/commercial/', r'/solutions/'],
         'location': [r'/location/', r'/locations/', r'/service-area/', r'/service-areas/', r'/city/', r'/cities/'],
         'team': [r'/teams?/', r'/groups?/', r'/organizations?/'],
@@ -208,15 +208,93 @@ def detect_static_cannibalization(pages, include_noindex: bool = False) -> List[
             'is_listicle': is_listicle_url(url),
         }
     
-    # Build inverted keyword index to avoid O(n²) full comparison
-    # Only compare pages that share at least one keyword
+    # =========================================================================
+    # PRE-SCAN: Detect duplicate folder structures (same slug in different paths)
+    # This catches /shop/X, /product-rentals/X, /product-category/X patterns
+    # =========================================================================
+    raw_issues = []
+    slug_to_pages = defaultdict(list)  # final slug -> list of page data
+    for pid, data in page_data.items():
+        path = urlparse(data['url']).path.rstrip('/')
+        if not path:
+            continue
+        slug = path.split('/')[-1]
+        if slug:
+            slug_to_pages[slug].append(data)
+    
+    # Pages involved in folder duplication — track to avoid double-flagging
+    folder_dup_ids = set()
+    
+    for slug, pages_with_slug in slug_to_pages.items():
+        if len(pages_with_slug) < 2:
+            continue
+        
+        # Get the parent folders for each page with this slug
+        folder_groups = defaultdict(list)
+        for pd in pages_with_slug:
+            path = urlparse(pd['url']).path.rstrip('/')
+            parts = path.strip('/').split('/')
+            parent = '/'.join(parts[:-1]) if len(parts) > 1 else '/'
+            folder_groups[parent].append(pd)
+        
+        # If same slug exists in 2+ different parent folders = duplicate folder structure
+        if len(folder_groups) >= 2:
+            all_dup_pages = []
+            for folder_pages in folder_groups.values():
+                for pd in folder_pages:
+                    all_dup_pages.append({
+                        'id': pd['page'].id, 'url': pd['url'],
+                        'title': pd['title'], 'page_type': pd['type'],
+                    })
+                    folder_dup_ids.add(pd['page'].id)
+            
+            raw_issues.append({
+                'type': 'duplicate_folder',
+                'severity': 'HIGH',
+                '_shared_slug': slug,
+                'keyword': slug.replace('-', ' '),
+                'explanation': f"'{slug}' exists under {len(folder_groups)} different URL folders. Each duplicate splits authority for the same keywords.",
+                'recommendation': "Pick ONE canonical folder structure, 301 redirect the others to it.",
+                'competing_pages': all_dup_pages,
+                'suggested_king': all_dup_pages[0] if all_dup_pages else None,
+            })
+    
+    # =========================================================================
+    # PRE-SCAN: Detect -old suffix pages (immediate redirect candidates)
+    # =========================================================================
+    for pid, data in page_data.items():
+        path = urlparse(data['url']).path.rstrip('/')
+        if '-old' in path.split('/')[-1]:
+            # Find the non-old version
+            clean_path = path.replace('-old', '')
+            for pid2, data2 in page_data.items():
+                if pid2 != pid and urlparse(data2['url']).path.rstrip('/') == clean_path:
+                    raw_issues.append({
+                        'type': 'near_duplicate_url',
+                        'severity': 'HIGH',
+                        'keyword': clean_path.split('/')[-1].replace('-', ' '),
+                        'explanation': f"Page has an '-old' version that should be redirected immediately.",
+                        'recommendation': "301 redirect the -old URL to the current version.",
+                        'competing_pages': [
+                            {'id': data['page'].id, 'url': data['url'], 'title': data['title'], 'page_type': data['type']},
+                            {'id': data2['page'].id, 'url': data2['url'], 'title': data2['title'], 'page_type': data2['type']},
+                        ],
+                        'suggested_king': {'id': data2['page'].id, 'url': data2['url'], 'title': data2['title']},
+                    })
+                    folder_dup_ids.add(pid)
+                    folder_dup_ids.add(pid2)
+                    break
+    
+    # =========================================================================
+    # PAIRWISE COMPARISON (skip pages already flagged in pre-scans)
+    # =========================================================================
     keyword_to_pages = defaultdict(set)
     for pid, data in page_data.items():
+        if pid in folder_dup_ids:
+            continue  # Already handled
         for kw in data['keywords']:
             keyword_to_pages[kw].add(pid)
     
-    # Build candidate pairs - require at least 2 shared keywords
-    # Single word overlap (e.g. "dance") creates massive false positives
     pair_shared_count = defaultdict(int)
     for kw, pids in keyword_to_pages.items():
         pid_list = sorted(pids)
@@ -224,11 +302,8 @@ def detect_static_cannibalization(pages, include_noindex: bool = False) -> List[
             for j in range(i + 1, len(pid_list)):
                 pair_shared_count[(pid_list[i], pid_list[j])] += 1
     
-    # Only consider pairs with 2+ shared keywords
     candidate_pairs = {pair for pair, count in pair_shared_count.items() if count >= 2}
     
-    # Check only candidate pairs — collect raw pairwise conflicts
-    raw_issues = []
     for id_a, id_b in candidate_pairs:
         data_a = page_data[id_a]
         data_b = page_data[id_b]
@@ -257,40 +332,56 @@ def detect_static_cannibalization(pages, include_noindex: bool = False) -> List[
     return issues[:30]
 
 
-def _extract_service_keyword(issue: Dict) -> str:
+def _get_cluster_key(issue: Dict) -> str:
     """
-    Extract the core service keyword from an issue for clustering.
-    Groups issues that share the same service concept.
+    Get a specific clustering key for an issue.
+    Each cluster must contain pages that share the SAME fix.
     """
+    conflict_type = issue.get('type', 'unknown')
     pages = issue.get('competing_pages', [])
     urls = [p.get('url', '') for p in pages]
     
-    # For location pages, extract the service slug (e.g., "event-planner" from
-    # "/service-area/event-planner/brooklyn-ny/")
-    for url in urls:
-        path = urlparse(url).path.lower().strip('/')
-        parts = path.split('/')
-        # Pattern: service-area/<service>/<location>/
-        if len(parts) >= 2 and parts[0] in ('service-area', 'service-areas', 'locations', 'location'):
-            return parts[1]  # The service slug
+    if conflict_type == 'near_duplicate_url':
+        # Cluster by the BASE slug (without -2, -old suffix)
+        # So obstacle-course pairs stay separate from belmont-stakes pairs
+        for url in urls:
+            slug = urlparse(url).path.rstrip('/').split('/')[-1]
+            base_slug = re.sub(r'-\d+$', '', slug).rstrip('-')
+            return f"near_duplicate:{base_slug}"
     
-    # Fallback: use the conflict type + shared keywords
-    return issue.get('type', 'unknown')
+    if conflict_type == 'duplicate_folder':
+        # Cluster by the shared slug/category name
+        slug = issue.get('_shared_slug', '')
+        return f"duplicate_folder:{slug}"
+    
+    if conflict_type == 'location_boilerplate':
+        # Cluster by the service keyword
+        for url in urls:
+            path = urlparse(url).path.lower().strip('/')
+            parts = path.split('/')
+            if len(parts) >= 2 and parts[0] in ('service-area', 'service-areas', 'locations', 'location'):
+                return f"location_boilerplate:{parts[1]}"
+    
+    # Default: cluster by type + shared keyword
+    kw = issue.get('keyword', '')
+    return f"{conflict_type}:{kw[:50]}"
 
 
 def _cluster_issues(raw_issues: List[Dict]) -> List[Dict]:
     """
     Group pairwise conflicts into clusters.
     
-    If 3+ pages trigger the same conflict type for the same service keyword,
-    merge into ONE cluster showing all pages.
+    Rules:
+    - Every cluster must contain pages that share the SAME conflict type AND same fix.
+    - Max 15 pages per cluster. If larger, it means grouping is too broad.
+    - Near-duplicate pairs cluster by their BASE slug (not all near-dupes together).
     """
     if not raw_issues:
         return []
     
-    # Group by (conflict_type, service_keyword)
+    # Group by specific cluster key
     cluster_map = defaultdict(lambda: {
-        'pages': {},  # id -> page data (deduped)
+        'pages': {},
         'issues': [],
         'type': None,
         'severity': None,
@@ -300,15 +391,12 @@ def _cluster_issues(raw_issues: List[Dict]) -> List[Dict]:
     })
     
     for issue in raw_issues:
-        conflict_type = issue.get('type', 'unknown')
-        service_kw = _extract_service_keyword(issue)
-        cluster_key = (conflict_type, service_kw)
+        cluster_key = _get_cluster_key(issue)
         
         cluster = cluster_map[cluster_key]
-        cluster['type'] = conflict_type
+        cluster['type'] = issue.get('type', 'unknown')
         cluster['issues'].append(issue)
         
-        # Keep highest severity
         sev_order = {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}
         if cluster['severity'] is None or sev_order.get(issue['severity'], 3) < sev_order.get(cluster['severity'], 3):
             cluster['severity'] = issue['severity']
@@ -318,7 +406,6 @@ def _cluster_issues(raw_issues: List[Dict]) -> List[Dict]:
         if issue.get('suggested_king') and not cluster['suggested_king']:
             cluster['suggested_king'] = issue['suggested_king']
         
-        # Collect all unique pages
         for page in issue.get('competing_pages', []):
             pid = page.get('id')
             if pid and pid not in cluster['pages']:
@@ -326,32 +413,29 @@ def _cluster_issues(raw_issues: List[Dict]) -> List[Dict]:
     
     # Convert clusters to issue format
     clustered_issues = []
-    for (conflict_type, service_kw), cluster in cluster_map.items():
+    for cluster_key, cluster in cluster_map.items():
         all_pages = list(cluster['pages'].values())
         num_pairs = len(cluster['issues'])
         
-        # Build display keyword — use service keyword, not token list
-        display_keyword = service_kw.replace('-', ' ').replace('_', ' ')
+        # Extract display keyword from cluster key
+        display_keyword = cluster_key.split(':', 1)[-1].replace('-', ' ').replace('_', ' ') if ':' in cluster_key else cluster_key
+        
         if len(all_pages) >= 3:
-            # This is a true cluster
             clustered_issues.append({
-                'type': conflict_type,
+                'type': cluster['type'],
                 'severity': cluster['severity'],
                 'keyword': display_keyword,
                 'is_cluster': True,
                 'cluster_size': len(all_pages),
                 'pairs_collapsed': num_pairs,
-                'explanation': f"{len(all_pages)} pages share the same conflict pattern. " + (cluster['explanation'] or ''),
+                'explanation': f"{len(all_pages)} pages involved. " + (cluster['explanation'] or ''),
                 'recommendation': cluster['recommendation'] or '',
-                'competing_pages': all_pages,
+                'competing_pages': all_pages[:15],  # Cap display at 15
                 'suggested_king': cluster['suggested_king'],
             })
         else:
-            # 2-page conflict — keep as individual issue but clean up keyword
             issue = cluster['issues'][0]
-            # Use the original keyword but strip if it's just token soup
             orig_kw = issue.get('keyword', display_keyword)
-            # If keyword has 5+ comma-separated tokens, it's token soup — use service keyword instead
             if orig_kw.count(',') >= 4:
                 orig_kw = display_keyword
             issue['keyword'] = orig_kw
@@ -614,13 +698,12 @@ def _check_pair_conflict(data_a: Dict, data_b: Dict) -> Optional[Dict]:
     if {type_a, type_b} == {'category', 'product'}:
         return None
     
-    # Product + Product with distinct identifiers under same category = SAFE
-    # e.g., /virtual-reality-rentals/vr-racing/ vs /virtual-reality-rentals/vr-surfing/
+    # Product + Product with distinct slugs = SAFE (valid product catalog)
+    # Products in the same or different categories are individual items, not competing
     if type_a == 'product' and type_b == 'product':
-        parts_a = [p for p in urlparse(url_a).path.strip('/').split('/') if p]
-        parts_b = [p for p in urlparse(url_b).path.strip('/').split('/') if p]
-        # Same parent folder but different product slug = valid product architecture
-        if len(parts_a) >= 2 and len(parts_b) >= 2 and parts_a[:-1] == parts_b[:-1] and parts_a[-1] != parts_b[-1]:
+        slug_a = urlparse(url_a).path.rstrip('/').split('/')[-1]
+        slug_b = urlparse(url_b).path.rstrip('/').split('/')[-1]
+        if slug_a != slug_b:
             return None
     
     # Team pages are organizational/navigational - SAFE with everything
@@ -633,15 +716,36 @@ def _check_pair_conflict(data_a: Dict, data_b: Dict) -> Optional[Dict]:
         return None
     
     # =========================================================================
-    # FALLBACK: High overlap but unclassified
+    # ADDITIONAL SAFE PATTERNS
     # =========================================================================
-    if overlap_ratio > 0.6:
+    
+    # Category + Category = likely duplicate folder (handled in pre-scan) or safe
+    if type_a == 'category' and type_b == 'category':
+        return None  # Duplicate folders caught in pre-scan; remaining are safe
+    
+    # General/page types with parent-child URL relationship = SAFE
+    # (Parent-child check is at the top, but catch any that slipped through)
+    
+    # If pages are deeply nested under different top-level sections = different context
+    parts_a = [p for p in urlparse(url_a).path.strip('/').split('/') if p]
+    parts_b = [p for p in urlparse(url_b).path.strip('/').split('/') if p]
+    if len(parts_a) >= 2 and len(parts_b) >= 2 and parts_a[0] != parts_b[0]:
+        # Different top-level sections (e.g., /event-services/ vs /shop/) = usually different intent
+        # Only flag if overlap is extremely high AND same page type
+        if overlap_ratio < 0.8 or type_a != type_b:
+            return None
+    
+    # =========================================================================
+    # FALLBACK: Very high overlap, same page type, unclassified
+    # Must be >80% overlap AND same type to be flagged
+    # =========================================================================
+    if overlap_ratio > 0.8 and type_a == type_b:
         return {
             'type': 'url_overlap',
             'severity': 'LOW',
-            'keyword': ', '.join(overlap),
-            'explanation': f"High URL keyword overlap ({int(overlap_ratio*100)}%) detected.",
-            'recommendation': "Review manually - may need differentiation or consolidation.",
+            'keyword': ', '.join(sorted(overlap)[:5]),
+            'explanation': f"High URL keyword overlap ({int(overlap_ratio*100)}%) between two {type_a} pages.",
+            'recommendation': "Review manually — may need differentiation or consolidation.",
             'competing_pages': [
                 {'id': data_a['page'].id, 'url': url_a, 'title': data_a['title'], 'page_type': type_a},
                 {'id': data_b['page'].id, 'url': url_b, 'title': data_b['title'], 'page_type': type_b},

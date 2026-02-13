@@ -4,11 +4,19 @@ Handles listing and retrieving pages with SEO data.
 """
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from .models import Page
 from .serializers import PageSerializer, PageListSerializer
 from sites.models import Site
+
+
+class LargeResultsSetPagination(PageNumberPagination):
+    """Allow up to 1000 pages per request for dashboard views."""
+    page_size = 1000
+    page_size_query_param = 'page_size'
+    max_page_size = 5000
 
 
 class PageViewSet(viewsets.ReadOnlyModelViewSet):
@@ -19,11 +27,17 @@ class PageViewSet(viewsets.ReadOnlyModelViewSet):
     retrieve: GET /api/v1/pages/{id}/ - Get page details with SEO data
     """
     permission_classes = [IsAuthenticated]
+    pagination_class = LargeResultsSetPagination
 
     def get_queryset(self):
         """Return pages for sites owned by the current user."""
         user_sites = Site.objects.filter(user=self.request.user)
         queryset = Page.objects.filter(site__in=user_sites)
+        
+        # Filter out noindex pages by default
+        include_noindex = self.request.query_params.get('include_noindex', 'false').lower()
+        if include_noindex != 'true':
+            queryset = queryset.filter(is_noindex=False)
 
         # Filter by site_id if provided
         site_id = self.request.query_params.get('site_id')

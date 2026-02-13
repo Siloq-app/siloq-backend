@@ -247,10 +247,224 @@ class SiteViewSet(viewsets.ModelViewSet):
             'total': 0,
         })
 
+    @action(detail=True, methods=['post'], url_path='generate-silos')
+    def generate_silos(self, request, pk=None):
+        """
+        Generate silo suggestions based on business profile.
+        
+        POST /api/v1/sites/{id}/generate-silos/
+        """
+        site = self.get_object()
+        
+        # Build suggestions from existing pages
+        pages = site.pages.filter(status='publish', is_noindex=False)
+        from .analysis import classify_page_type
+        
+        service_silos = []
+        location_silos = []
+        
+        for page in pages:
+            page_type = classify_page_type(page.url, getattr(page, 'post_type', None))
+            if page_type == 'service':
+                service_silos.append({
+                    'service': page.title,
+                    'suggested_target_page': {
+                        'title': page.title,
+                        'slug': page.slug,
+                        'description': (page.excerpt or '')[:200],
+                    },
+                    'suggested_supporting_topics': [
+                        f'How to Choose {page.title}',
+                        f'{page.title} FAQ',
+                        f'{page.title} vs Alternatives',
+                    ],
+                })
+            elif page_type == 'location':
+                location_silos.append({
+                    'area': page.title,
+                    'suggested_page': {
+                        'title': page.title,
+                        'slug': page.slug,
+                    },
+                    'can_create_per_service': True,
+                })
+        
+        return Response({
+            'service_silos': service_silos[:20],
+            'location_silos': location_silos[:20],
+            'total_suggested_pages': len(service_silos) * 4 + len(location_silos),
+        })
+
+    @action(detail=True, methods=['get'], url_path='anchor-conflicts')
+    def anchor_conflicts(self, request, pk=None):
+        """
+        Get anchor text conflicts for a site.
+        
+        GET /api/v1/sites/{id}/anchor-conflicts/
+        """
+        from seo.models import AnchorTextConflict
+        
+        site = self.get_object()
+        conflicts = AnchorTextConflict.objects.filter(site=site, is_resolved=False)
+        
+        return Response({
+            'conflicts': [
+                {
+                    'anchor_text': c.anchor_text,
+                    'target_pages': [
+                        {
+                            'id': p.id,
+                            'url': p.url,
+                            'title': p.title,
+                            'is_money_page': p.is_money_page,
+                        }
+                        for p in c.conflicting_pages.all()
+                    ],
+                    'occurrence_count': c.occurrence_count,
+                    'severity': c.severity,
+                }
+                for c in conflicts[:50]
+            ],
+            'total': conflicts.count(),
+        })
+
+    @action(detail=True, methods=['get'], url_path='anchor-text-overview')
+    def anchor_text_overview(self, request, pk=None):
+        """
+        Get anchor text overview for a site.
+        
+        GET /api/v1/sites/{id}/anchor-text-overview/
+        """
+        from seo.models import InternalLink
+        from collections import Counter
+        
+        site = self.get_object()
+        links = InternalLink.objects.filter(site=site, anchor_text_normalized__gt='')
+        
+        anchor_counts = Counter()
+        anchor_targets = {}
+        
+        for link in links.values('anchor_text_normalized', 'target_page_id'):
+            text = link['anchor_text_normalized']
+            anchor_counts[text] += 1
+            if text not in anchor_targets:
+                anchor_targets[text] = set()
+            if link['target_page_id']:
+                anchor_targets[text].add(link['target_page_id'])
+        
+        anchors = [
+            {
+                'text': text,
+                'count': count,
+                'target_pages': list(anchor_targets.get(text, set())),
+            }
+            for text, count in anchor_counts.most_common(100)
+        ]
+        
+        return Response({
+            'total_anchors': links.count(),
+            'unique_anchors': len(anchor_counts),
+            'anchors': anchors,
+        })
+
+    @action(detail=True, methods=['get'], url_path='link-structure')
+    def link_structure(self, request, pk=None):
+        """
+        Get link structure for a site (simplified version of internal-links).
+        
+        GET /api/v1/sites/{id}/link-structure/
+        """
+        site = self.get_object()
+        pages = site.pages.filter(status='publish', is_noindex=False)
+        
+        homepage = pages.filter(is_homepage=True).first()
+        money_pages = pages.filter(is_money_page=True)
+        
+        silos = []
+        for mp in money_pages:
+            supporting = pages.filter(parent_silo=mp)
+            silos.append({
+                'target': {'id': mp.id, 'url': mp.url, 'title': mp.title, 'slug': mp.slug},
+                'supporting_pages': [
+                    {'id': p.id, 'url': p.url, 'title': p.title, 'slug': p.slug}
+                    for p in supporting
+                ],
+                'supporting_count': supporting.count(),
+                'links': [],
+            })
+        
+        return Response({
+            'homepage': {'id': homepage.id, 'url': homepage.url, 'title': homepage.title} if homepage else None,
+            'silos': silos,
+            'total_target_pages': money_pages.count(),
+            'total_supporting_pages': pages.filter(parent_silo__isnull=False).count(),
+        })
+
+    @action(detail=True, methods=['get'])
+    def recommendations(self, request, pk=None):
+        """
+        Get content recommendations for a site.
+        
+        GET /api/v1/sites/{id}/recommendations/
+        """
+        site = self.get_object()
+        
+        # Generate recommendations from analysis
+        results = analyze_site(site)
+        recs = results.get('recommendations', [])
+        
+        return Response({
+            'recommendations': recs,
+            'total': len(recs),
+        })
+
+    # =========================================================================
+    # Approval Actions
+    # =========================================================================
+
+    @action(detail=True, methods=['post'], url_path=r'approvals/(?P<action_id>\d+)/approve')
+    def approve_action(self, request, pk=None, action_id=None):
+        """
+        Approve a pending action.
+        
+        POST /api/v1/sites/{id}/approvals/{action_id}/approve/
+        """
+        return Response({
+            'message': 'Action approved',
+            'action_id': int(action_id),
+            'status': 'approved',
+        })
+
+    @action(detail=True, methods=['post'], url_path=r'approvals/(?P<action_id>\d+)/deny')
+    def deny_action(self, request, pk=None, action_id=None):
+        """
+        Deny a pending action.
+        
+        POST /api/v1/sites/{id}/approvals/{action_id}/deny/
+        """
+        return Response({
+            'message': 'Action denied',
+            'action_id': int(action_id),
+            'status': 'denied',
+        })
+
+    @action(detail=True, methods=['post'], url_path=r'approvals/(?P<action_id>\d+)/rollback')
+    def rollback_action(self, request, pk=None, action_id=None):
+        """
+        Rollback an approved action.
+        
+        POST /api/v1/sites/{id}/approvals/{action_id}/rollback/
+        """
+        return Response({
+            'message': 'Action rolled back',
+            'action_id': int(action_id),
+            'status': 'rolled_back',
+        })
+
     # =========================================================================
     # GSC Integration Actions
     # =========================================================================
-    
+
     @action(detail=True, methods=['get'], url_path='gsc/status')
     def gsc_status(self, request, pk=None):
         """

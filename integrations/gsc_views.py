@@ -426,8 +426,30 @@ def _fetch_search_analytics(
     response = requests.post(url, headers=headers, json=payload)
     
     if response.status_code != 200:
-        logger.error(f"GSC API error: {response.text}")
-        return []
+        print(f"[GSC] API error for {site_url} (HTTP {response.status_code}): {response.text[:200]}", flush=True)
+        
+        # If domain property fails, try URL property format and vice versa
+        alt_url = None
+        if site_url.startswith('sc-domain:'):
+            domain = site_url.replace('sc-domain:', '')
+            alt_url = f'https://{domain}/'
+        elif site_url.startswith('http'):
+            domain = site_url.replace('https://', '').replace('http://', '').rstrip('/')
+            alt_url = f'sc-domain:{domain}'
+        
+        if alt_url:
+            print(f"[GSC] Trying alternate format: {alt_url}", flush=True)
+            encoded_alt = quote(alt_url, safe='')
+            alt_api_url = f'{GSC_API_BASE}/sites/{encoded_alt}/searchAnalytics/query'
+            response = requests.post(alt_api_url, headers=headers, json=payload)
+            if response.status_code == 200:
+                print(f"[GSC] Alternate format worked: {alt_url}", flush=True)
+                # Fall through to process response below
+            else:
+                print(f"[GSC] Alternate also failed (HTTP {response.status_code})", flush=True)
+                return []
+        else:
+            return []
     
     data = response.json()
     rows = data.get('rows', [])

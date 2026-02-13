@@ -419,6 +419,75 @@ class SiteViewSet(viewsets.ModelViewSet):
         })
 
     # =========================================================================
+    # Content Generation
+    # =========================================================================
+
+    @action(detail=True, methods=['post'], url_path='generate-content')
+    def generate_content(self, request, pk=None):
+        """
+        Generate supporting page content using AI.
+        
+        POST /api/v1/sites/{id}/generate-content/
+        Body: {
+            "target_page_id": 123,
+            "content_type": "supporting_article",  // faq, how_to, comparison
+            "topic": "How to Choose the Right Dance Jacket"
+        }
+        """
+        from seo.content_generation import generate_supporting_content
+        from seo.models import Page
+        
+        site = self.get_object()
+        target_page_id = request.data.get('target_page_id')
+        content_type = request.data.get('content_type', 'supporting_article')
+        topic = request.data.get('topic', '')
+        
+        if not target_page_id:
+            return Response({'error': 'target_page_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not topic:
+            return Response({'error': 'topic required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            target_page = Page.objects.get(id=target_page_id, site=site)
+        except Page.DoesNotExist:
+            return Response({'error': 'Target page not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        result = generate_supporting_content(
+            target_page_title=target_page.title,
+            target_page_url=target_page.url,
+            content_type=content_type,
+            topic=topic,
+            business_name=site.name,
+            business_type=site.business_type or '',
+            service_areas=site.service_areas or [],
+        )
+        
+        if not result.get('success'):
+            return Response({
+                'error': result.get('error', 'Content generation failed'),
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        return Response({
+            'success': True,
+            'target_page': {
+                'id': target_page.id,
+                'title': target_page.title,
+                'url': target_page.url,
+            },
+            'generated': {
+                'title': result.get('title', ''),
+                'content': result.get('content', ''),
+                'meta_description': result.get('meta_description', ''),
+                'suggested_slug': result.get('suggested_slug', ''),
+                'internal_links': result.get('internal_links', []),
+                'word_count': result.get('word_count', 0),
+            },
+            'model_used': result.get('model_used', ''),
+            'tokens_used': result.get('tokens_used', 0),
+        })
+
+    # =========================================================================
     # Approval Actions
     # =========================================================================
 

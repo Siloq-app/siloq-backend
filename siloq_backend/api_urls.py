@@ -18,6 +18,14 @@ def verify_api_key_view(request):
     from integrations.sync import verify_api_key
     return verify_api_key(request)
 
+def content_jobs_create_view(request):
+    from seo.content_views import create_content_job
+    return create_content_job(request)
+
+def content_jobs_status_view(request, job_id):
+    from seo.content_views import get_content_job_status
+    return get_content_job_status(request, job_id)
+
 urlpatterns = [
     # Health check (no auth) - GET /api/v1/health/
     path('health/', health_check),
@@ -25,12 +33,19 @@ urlpatterns = [
     path('auth/', include('accounts.urls')),
     # WordPress plugin: POST /api/v1/auth/verify with Bearer <api_key>
     path('auth/verify', verify_api_key_view),
-    # API key management
+    # API key management (site-specific keys)
     path('api-keys/', include('sites.api_key_urls')),
+    # Account key management (master/agency keys)
+    path('account-keys/', include('sites.account_key_urls')),
     # Site management
     path('sites/', include('sites.urls')),
+    # Google Search Console integration
+    path('gsc/', include('integrations.gsc_urls')),
     # WordPress integration endpoints (scans, page sync) - MUST be before pages/
     path('', include('integrations.urls')),
     # Page management (dashboard) - comes after integrations to avoid conflicts
     path('pages/', include('seo.urls')),
+    # Content generation jobs (WordPress plugin compatibility)
+    path('content-jobs/', content_jobs_create_view),
+    path('content-jobs/<str:job_id>/', content_jobs_status_view),
 ]

@@ -17,6 +17,9 @@ class User(AbstractUser):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    # Subscription status (required NOT NULL field in database)
+    subscription_status = models.CharField(max_length=50, default='free', blank=True)
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']

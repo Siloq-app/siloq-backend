@@ -30,6 +30,14 @@ ALLOWED_HOSTS = [host.strip() for host in _allowed_hosts_str.split(',') if host.
 if 'host.docker.internal' not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append('host.docker.internal')
 
+# Frontend URL (for OAuth redirects)
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://app.siloq.ai')
+
+# Google Search Console OAuth
+GSC_CLIENT_ID = os.getenv('GSC_CLIENT_ID', '')
+GSC_CLIENT_SECRET = os.getenv('GSC_CLIENT_SECRET', '')
+GSC_REDIRECT_URI = os.getenv('GSC_REDIRECT_URI', 'https://app.siloq.ai/api/v1/gsc/callback/')
+
 
 # Application definition
 
@@ -194,3 +202,32 @@ CORS_ALLOW_CREDENTIALS = True
 
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.User'
+
+# Logging - ensure all output goes to stdout for DigitalOcean App Platform
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{levelname}] {name}: {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'integrations': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+    },
+}

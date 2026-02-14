@@ -464,27 +464,37 @@ def _fetch_search_analytics(
     if response.status_code != 200:
         print(f"[GSC] API error for {site_url} (HTTP {response.status_code}): {response.text[:200]}", flush=True)
         
-        # If domain property fails, try URL property format and vice versa
-        alt_url = None
+        # Try alternate URL formats — Google is picky about exact property URL
+        domain = site_url.replace('https://', '').replace('http://', '').replace('sc-domain:', '').rstrip('/')
+        alternates = []
         if site_url.startswith('sc-domain:'):
-            domain = site_url.replace('sc-domain:', '')
-            alt_url = f'https://{domain}/'
-        elif site_url.startswith('http'):
-            domain = site_url.replace('https://', '').replace('http://', '').rstrip('/')
-            alt_url = f'sc-domain:{domain}'
+            alternates = [
+                f'https://{domain}',        # no trailing slash
+                f'https://{domain}/',        # with trailing slash
+                f'https://www.{domain}/',    # www variant
+            ]
+        else:
+            alternates = [
+                site_url.rstrip('/'),                    # no trailing slash
+                site_url.rstrip('/') + '/',              # with trailing slash
+                f'sc-domain:{domain}',                   # domain property
+                f'https://www.{domain}/',                # www variant
+            ]
+        # Remove the original URL we already tried
+        alternates = [u for u in alternates if u != site_url]
         
-        if alt_url:
+        for alt_url in alternates:
             print(f"[GSC] Trying alternate format: {alt_url}", flush=True)
             encoded_alt = quote(alt_url, safe='')
             alt_api_url = f'{GSC_API_BASE}/sites/{encoded_alt}/searchAnalytics/query'
             response = requests.post(alt_api_url, headers=headers, json=payload)
             if response.status_code == 200:
                 print(f"[GSC] Alternate format worked: {alt_url}", flush=True)
-                # Fall through to process response below
+                break
             else:
-                print(f"[GSC] Alternate also failed (HTTP {response.status_code})", flush=True)
-                return []
+                print(f"[GSC] Alternate failed (HTTP {response.status_code}): {alt_url}", flush=True)
         else:
+            print(f"[GSC] All URL formats failed for {domain}", flush=True)
             return []
     
     data = response.json()

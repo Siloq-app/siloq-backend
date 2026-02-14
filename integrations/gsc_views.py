@@ -37,7 +37,7 @@ GSC_REDIRECT_URI = os.environ.get('GSC_REDIRECT_URI', 'https://api.siloq.ai/api/
 
 GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/auth'
 GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
-GSC_API_BASE = 'https://searchconsole.googleapis.com/v1'
+GSC_API_BASE = 'https://www.googleapis.com/webmasters/v3'
 
 GSC_SCOPES = [
     'https://www.googleapis.com/auth/webmasters.readonly',

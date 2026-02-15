@@ -20,6 +20,7 @@ from rest_framework import status
 from sites.models import Site
 from seo.models import Page
 from seo.content_generation import generate_supporting_content
+from ai.image_generator import generate_content_image
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +322,7 @@ def generate_from_recommendation(request, site_id, rec_id):
     # Get custom overrides
     custom_title = request.data.get('custom_title')
     custom_topic = request.data.get('custom_topic')
+    include_image = request.data.get('include_image', True)
     
     title = custom_title or recommendation['title']
     topic = custom_topic or recommendation['title']
@@ -355,8 +357,25 @@ def generate_from_recommendation(request, site_id, rec_id):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
     
+    # Generate featured image (optional, non-blocking)
+    image_data = {}
+    if include_image:
+        logger.info(f"Generating DALL-E image for: {topic}")
+        img_result = generate_content_image(
+            topic=topic,
+            business_name=site.name,
+            content_type=recommendation.get('content_type', 'supporting_article'),
+        )
+        if img_result.get('success'):
+            image_data = {
+                'image_url': img_result['image_url'],
+                'image_alt_text': img_result['alt_text'],
+                'image_caption': img_result['caption'],
+                'image_seo_filename': img_result['seo_filename'],
+            }
+
     # Return generated content with recommendation context
-    return Response({
+    response_data = {
         'recommendation_id': rec_id,
         'title': result['title'],
         'content': result['content'],
@@ -367,7 +386,9 @@ def generate_from_recommendation(request, site_id, rec_id):
         'status': 'draft',
         'model_used': result.get('model_used'),
         'tokens_used': result.get('tokens_used'),
-    }, status=status.HTTP_201_CREATED)
+        **image_data,
+    }
+    return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])
@@ -444,26 +465,49 @@ def approve_content(request, site_id):
     
     logger.info(f"Created draft page {page.id} for site {site.id}: {title}")
     
-    # TODO: Trigger WordPress webhook to create the actual draft post
-    # This would typically:
-    # 1. Call WordPress REST API to create a draft post
-    # 2. Update the page.wp_post_id with the returned WP post ID
-    # 3. Return the edit URL for the user to review in WordPress
-    #
-    # For now, we'll return the page data and let the WordPress plugin
-    # poll for new draft pages or implement a webhook receiver
-    
-    return Response({
+    # Push draft to WordPress via webhook
+    from integrations.wordpress_webhook import send_webhook_to_wordpress
+
+    wp_result = send_webhook_to_wordpress(site, 'content.create_draft', {
+        'title': title,
+        'content': content,
+        'slug': slug,
+        'meta_description': meta_description,
+        'siloq_page_id': str(page.id),
+        'status': 'draft',
+    })
+
+    # If WP returned a post ID, persist it
+    wp_post_id = None
+    wp_edit_url = None
+    if wp_result['success'] and wp_result.get('response'):
+        wp_post_id = wp_result['response'].get('wp_post_id')
+        if wp_post_id:
+            page.wp_post_id = int(wp_post_id)
+            page.save(update_fields=['wp_post_id'])
+            wp_edit_url = f"{site.url}/wp-admin/post.php?post={wp_post_id}&action=edit"
+
+    response_data = {
         'page_id': page.id,
         'title': page.title,
         'slug': page.slug,
         'url': page.url,
         'status': page.status,
         'silo_id': parent_silo.id if parent_silo else None,
-        'message': 'Page created as draft. Sync with WordPress to publish.',
-        # In production, would include:
-        # 'wordpress_edit_url': f"{site.url}/wp-admin/post.php?post={page.wp_post_id}&action=edit"
-    }, status=status.HTTP_201_CREATED)
+        'wordpress_push': {
+            'success': wp_result['success'],
+            'error': wp_result.get('error'),
+            'wp_post_id': wp_post_id,
+            'edit_url': wp_edit_url,
+        },
+        'message': (
+            'Page created and pushed to WordPress as draft.'
+            if wp_result['success']
+            else 'Page created locally. WordPress push failed — retry via sync.'
+        ),
+    }
+
+    return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 def _fallback_recommendations(site: Site) -> List[Dict[str, Any]]:

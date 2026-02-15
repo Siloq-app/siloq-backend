@@ -161,7 +161,7 @@ class SiteViewSet(viewsets.ModelViewSet):
         - gsc_data: impression/click data if GSC connected, null otherwise
         """
         site = self.get_object()
-        pages = site.pages.all().prefetch_related('seo_data')
+        pages = site.pages.filter(status='publish', is_noindex=False).prefetch_related('seo_data')
         
         # Check if GSC is connected
         gsc_connected = bool(getattr(site, 'gsc_refresh_token', None))

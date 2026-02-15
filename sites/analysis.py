@@ -1225,7 +1225,7 @@ def detect_cannibalization(pages, include_noindex: bool = False) -> List[Dict[st
 
 def analyze_site(site) -> Dict[str, Any]:
     """Run full analysis on a site including GEO readiness."""
-    pages = site.pages.all().prefetch_related('seo_data')
+    pages = site.pages.filter(status='publish', is_noindex=False).prefetch_related('seo_data')
     
     health = calculate_health_score(site)
     issues = detect_static_cannibalization(pages)

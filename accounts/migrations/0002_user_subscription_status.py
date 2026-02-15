@@ -3,6 +3,20 @@
 from django.db import migrations, models
 
 
+def add_subscription_status_if_missing(apps, schema_editor):
+    """Only add the column if it doesn't already exist."""
+    connection = schema_editor.connection
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'users' AND column_name = 'subscription_status'"
+        )
+        if not cursor.fetchone():
+            cursor.execute(
+                "ALTER TABLE users ADD COLUMN subscription_status varchar(50) DEFAULT 'free' NOT NULL"
+            )
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,9 +24,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='user',
-            name='subscription_status',
-            field=models.CharField(blank=True, default='free', max_length=50),
-        ),
+        migrations.RunPython(add_subscription_status_if_missing, migrations.RunPython.noop),
     ]

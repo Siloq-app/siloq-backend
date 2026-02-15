@@ -173,7 +173,7 @@ def _check_h1_cross(site, proposed_title, proposed_h1):
     try:
         # Try PageMetadata model first (v2 schema), fall back to Page
         try:
-            from .safeguard_models import PageMetadata
+            from .models import PageMetadata
             pages = PageMetadata.objects.filter(site_id=site.id, is_indexable=True).values_list('title_tag', 'h1_tag')
             existing_texts = []
             for title_tag, h1_tag in pages:
@@ -208,7 +208,7 @@ def _check_silo_boundary(site, proposed_keyword, silo_id):
         return _make_check('silo_boundary', 'pass', 'No silo_id, skipping.')
     try:
         try:
-            from .safeguard_models import SiloKeyword
+            from .models import SiloKeyword
             # Check if keyword exists in another silo
             other_silo = SiloKeyword.objects.filter(
                 site_id=site.id, keyword__iexact=proposed_keyword
@@ -257,7 +257,7 @@ def _check_canonical_tag(site, proposed_slug):
         return _make_check('canonical_tag', 'pass', 'No slug provided, skipping.')
     try:
         try:
-            from .safeguard_models import PageMetadata
+            from .models import PageMetadata
             pages = PageMetadata.objects.filter(site_id=site.id).exclude(
                 canonical_url__isnull=True
             ).exclude(canonical_url='').values_list('canonical_url', 'page_url')
@@ -280,7 +280,7 @@ def _log_validation(site, proposed_title, proposed_keyword, proposed_slug,
                     proposed_h1, silo_id, page_type, result):
     """Log validation run to ValidationLog if available."""
     try:
-        from .safeguard_models import ValidationLog
+        from .models import ValidationLog
         ValidationLog.objects.create(
             site_id=site.id,
             proposed_title=proposed_title,

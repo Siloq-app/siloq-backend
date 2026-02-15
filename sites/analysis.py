@@ -180,7 +180,7 @@ def find_synonym_overlap(keywords1: Set[str], keywords2: Set[str]) -> List[Tuple
 # STATIC ANALYSIS (Without GSC Data)
 # =============================================================================
 
-def detect_static_cannibalization(pages, include_noindex: bool = False) -> List[Dict[str, Any]]:
+def detect_static_cannibalization(pages, include_noindex: bool = False, impressions_map: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
     """
     Detect potential cannibalization from URL/content analysis.
     This is a PREDICTION - GSC data validates it.
@@ -188,6 +188,9 @@ def detect_static_cannibalization(pages, include_noindex: bool = False) -> List[
     issues = []
     page_list = list(pages)
     
+    if impressions_map is None:
+        impressions_map = {}
+
     if len(page_list) < 2:
         return issues
     
@@ -308,8 +311,10 @@ def detect_static_cannibalization(pages, include_noindex: bool = False) -> List[
         data_a = page_data[id_a]
         data_b = page_data[id_b]
         
-        issue = _check_pair_conflict(data_a, data_b)
+        issue = _check_pair_conflict(data_a, data_b, impressions=impressions_map)
         if issue:
+            # Apply impression-weighted severity capping
+            issue = _apply_impression_severity(issue, impressions_map)
             raw_issues.append(issue)
     
     # =========================================================================
@@ -326,8 +331,8 @@ def detect_static_cannibalization(pages, include_noindex: bool = False) -> List[
         issue['gsc_data'] = None
     
     # Sort by severity
-    severity_order = {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}
-    issues.sort(key=lambda x: severity_order.get(x['severity'], 3))
+    severity_order = {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2, 'INFO': 3}
+    issues.sort(key=lambda x: severity_order.get(x['severity'], 4))
     
     return issues[:30]
 
@@ -490,7 +495,51 @@ def _is_parent_child(url_a: str, url_b: str) -> bool:
     return path_b.startswith(path_a + '/') or path_a.startswith(path_b + '/')
 
 
-def _check_pair_conflict(data_a: Dict, data_b: Dict) -> Optional[Dict]:
+def _apply_impression_severity(issue: Dict, impressions_map: Dict[str, int]) -> Dict:
+    """Apply impression-weighted severity capping to a cannibalization issue.
+    
+    Rules:
+    - Both pages have 0 impressions AND score < 20 → 'INFO'
+    - Both pages have 0 impressions → cap at 'LOW'
+    - Max impressions < 10 → cap at 'MEDIUM'
+    - Adds impression data to competing_pages and total_impressions to issue
+    """
+    if not impressions_map:
+        return issue
+
+    severity_rank = {'INFO': 0, 'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
+    competing = issue.get('competing_pages', [])
+    page_impressions = []
+
+    for page in competing:
+        url = page.get('url', '')
+        imp = impressions_map.get(url, 0)
+        page['impressions'] = imp
+        page_impressions.append(imp)
+
+    max_imp = max(page_impressions) if page_impressions else 0
+    all_zero = all(i == 0 for i in page_impressions)
+    issue['total_impressions'] = sum(page_impressions)
+
+    current = issue.get('severity', 'LOW')
+
+    if all_zero:
+        # Cosmetic similarity only — compute a rough score from overlap ratio in keyword field
+        kw_count = len(issue.get('keyword', '').split(', '))
+        if kw_count < 3:
+            cap = 'INFO'
+        else:
+            cap = 'LOW'
+        if severity_rank.get(current, 1) > severity_rank.get(cap, 0):
+            issue['severity'] = cap
+    elif max_imp < 10:
+        if severity_rank.get(current, 2) > severity_rank['MEDIUM']:
+            issue['severity'] = 'MEDIUM'
+
+    return issue
+
+
+def _check_pair_conflict(data_a: Dict, data_b: Dict, impressions: Optional[Dict[str, int]] = None) -> Optional[Dict]:
     """Check if two pages have a cannibalization conflict."""
     type_a, type_b = data_a['type'], data_b['type']
     url_a, url_b = data_a['url'], data_b['url']
@@ -1215,12 +1264,16 @@ def analyze_geo_readiness(page, business_name: str = None, city: str = None) -> 
 # MAIN ANALYSIS FUNCTION
 # =============================================================================
 
-def detect_cannibalization(pages, include_noindex: bool = False) -> List[Dict[str, Any]]:
+def detect_cannibalization(pages, include_noindex: bool = False, impressions_map: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
     """
     Main entry point for cannibalization detection (static analysis).
     For GSC-validated analysis, use analyze_gsc_data() separately.
+    
+    Args:
+        impressions_map: Optional dict mapping page URL -> total impressions from GSC.
+                         Used to weight severity scoring.
     """
-    return detect_static_cannibalization(pages, include_noindex)
+    return detect_static_cannibalization(pages, include_noindex, impressions_map=impressions_map)
 
 
 def analyze_site(site) -> Dict[str, Any]:

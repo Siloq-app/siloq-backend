@@ -21,6 +21,16 @@ from .analysis import detect_cannibalization, analyze_site, calculate_health_sco
 logger = logging.getLogger(__name__)
 
 
+def _get_page_field(pages, page_id, field, default=None):
+    """Look up a field on a page object by ID from a queryset."""
+    if not page_id:
+        return default
+    for page in pages:
+        if page.id == page_id:
+            return getattr(page, field, default)
+    return default
+
+
 class SiteViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing sites.
@@ -161,13 +171,31 @@ class SiteViewSet(viewsets.ModelViewSet):
         - gsc_data: impression/click data if GSC connected, null otherwise
         """
         site = self.get_object()
-        pages = site.pages.filter(status='publish', is_noindex=False).prefetch_related('seo_data')
+        pages = list(site.pages.filter(status='publish', is_noindex=False).prefetch_related('seo_data'))
         
         # Check if GSC is connected
         gsc_connected = bool(getattr(site, 'gsc_refresh_token', None))
         
-        # Detect cannibalization (static analysis)
-        issues = detect_cannibalization(pages)
+        # Build impression map from GSC if connected
+        impressions_map = {}
+        if gsc_connected:
+            try:
+                from integrations.gsc import refresh_access_token, fetch_search_analytics
+                tokens = refresh_access_token(site.gsc_refresh_token)
+                access_token = tokens.get('access_token', '')
+                if access_token and site.gsc_site_url:
+                    rows = fetch_search_analytics(
+                        access_token, site.gsc_site_url,
+                        dimensions=['page'], row_limit=5000,
+                    )
+                    for row in rows:
+                        page_url = row.get('keys', [''])[0] if row.get('keys') else row.get('page', '')
+                        impressions_map[page_url] = impressions_map.get(page_url, 0) + row.get('impressions', 0)
+            except Exception:
+                pass  # Gracefully degrade — run without impression data
+        
+        # Detect cannibalization (static analysis with optional impression weighting)
+        issues = detect_cannibalization(pages, impressions_map=impressions_map)
         
         # Format for API response
         formatted_issues = []
@@ -191,8 +219,11 @@ class SiteViewSet(viewsets.ModelViewSet):
                         'title': p.get('title', ''),
                         'page_type': p.get('page_type', ''),
                         'impression_share': p.get('impression_share') or p.get('share'),
+                        'impressions': p.get('impressions', impressions_map.get(p.get('url', ''), 0)),
                         'clicks': p.get('clicks'),
                         'position': p.get('position'),
+                        'is_noindex': _get_page_field(pages, p.get('id'), 'is_noindex', False),
+                        'post_type': _get_page_field(pages, p.get('id'), 'post_type', ''),
                     }
                     for p in issue.get('competing_pages', [])
                 ],

@@ -429,6 +429,10 @@ def approve_content(request, site_id):
     silo_id = request.data.get('silo_id')
     meta_description = request.data.get('meta_description', '')
     slug = request.data.get('slug', '')
+    image_url = request.data.get('image_url', '')
+    image_alt_text = request.data.get('image_alt_text', '')
+    image_caption = request.data.get('image_caption', '')
+    image_seo_filename = request.data.get('image_seo_filename', '')
     
     # Generate slug if not provided
     if not slug:
@@ -506,6 +510,15 @@ def approve_content(request, site_id):
             else 'Page created locally. WordPress push failed — retry via sync.'
         ),
     }
+
+    # Pass through image data so dashboard/WP plugin can download and attach it
+    if image_url:
+        response_data.update({
+            'image_url': image_url,
+            'image_alt_text': image_alt_text,
+            'image_caption': image_caption,
+            'image_seo_filename': image_seo_filename,
+        })
 
     return Response(response_data, status=status.HTTP_201_CREATED)
 

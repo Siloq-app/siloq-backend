@@ -4,6 +4,23 @@ import django.db.models.deletion
 from django.db import migrations, models
 
 
+def safe_rename_indexes(apps, schema_editor):
+    """Rename indexes only if old name exists, skip if already renamed or missing."""
+    renames = [
+        ('internal_links_site_source_idx', 'internal_li_site_id_e1c924_idx'),
+        ('internal_links_site_target_idx', 'internal_li_site_id_7e2254_idx'),
+        ('internal_links_anchor_idx', 'internal_li_anchor__14ddb9_idx'),
+        ('pages_is_mone_idx', 'pages_is_mone_525ba2_idx'),
+        ('pages_is_home_idx', 'pages_is_home_afbfd5_idx'),
+    ]
+    with schema_editor.connection.cursor() as cursor:
+        for old_name, new_name in renames:
+            cursor.execute("SELECT indexname FROM pg_indexes WHERE indexname = %s", [old_name])
+            if cursor.fetchone():
+                cursor.execute(f'ALTER INDEX "{old_name}" RENAME TO "{new_name}"')
+            # If old doesn't exist, check if new already exists — if so, skip silently
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -107,31 +124,7 @@ class Migration(migrations.Migration):
                 'ordering': ['classified_type', 'normalized_path'],
             },
         ),
-        migrations.RenameIndex(
-            model_name='internallink',
-            new_name='internal_li_site_id_e1c924_idx',
-            old_name='internal_links_site_source_idx',
-        ),
-        migrations.RenameIndex(
-            model_name='internallink',
-            new_name='internal_li_site_id_7e2254_idx',
-            old_name='internal_links_site_target_idx',
-        ),
-        migrations.RenameIndex(
-            model_name='internallink',
-            new_name='internal_li_anchor__14ddb9_idx',
-            old_name='internal_links_anchor_idx',
-        ),
-        migrations.RenameIndex(
-            model_name='page',
-            new_name='pages_is_mone_525ba2_idx',
-            old_name='pages_is_mone_idx',
-        ),
-        migrations.RenameIndex(
-            model_name='page',
-            new_name='pages_is_home_afbfd5_idx',
-            old_name='pages_is_home_idx',
-        ),
+        migrations.RunPython(safe_rename_indexes, migrations.RunPython.noop),
         migrations.AddField(
             model_name='analysisrun',
             name='site',

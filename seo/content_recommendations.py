@@ -25,6 +25,114 @@ from ai.image_generator import generate_content_image
 logger = logging.getLogger(__name__)
 
 
+def _check_content_cannibalization(site, title: str, topic: str) -> dict:
+    """
+    Preflight check: will this content cannibalize existing pages?
+    
+    Checks:
+    1. Exact/near-exact title match
+    2. Slug collision
+    3. Keyword overlap with existing pages (>60% shared keywords)
+    
+    Returns:
+        {blocked: bool, conflicts: [...], suggestion: str}
+    """
+    from sites.analysis import extract_url_keywords
+    from urllib.parse import urlparse
+    import re
+    
+    existing_pages = Page.objects.filter(
+        site=site, status='publish', is_noindex=False
+    ).values_list('id', 'title', 'url', 'post_type')
+    
+    title_lower = title.lower().strip()
+    topic_lower = topic.lower().strip()
+    
+    # Extract keywords from the proposed title
+    title_words = set(re.findall(r'[a-z]+', title_lower)) - {
+        'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
+        'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from',
+        'how', 'what', 'why', 'when', 'where', 'which', 'who',
+        'and', 'or', 'not', 'but', 'if', 'then', 'your', 'you',
+        'do', 'does', 'did', 'can', 'will', 'should', 'would', 'could',
+    }
+    
+    if len(title_words) < 2:
+        return {'blocked': False, 'conflicts': []}
+    
+    # Generate proposed slug
+    proposed_slug = re.sub(r'[^a-z0-9-]', '', title_lower.replace(' ', '-'))
+    
+    conflicts = []
+    
+    for page_id, page_title, page_url, post_type in existing_pages:
+        if not page_title:
+            continue
+        
+        existing_title_lower = page_title.lower().strip()
+        
+        # Check 1: Near-exact title match (>90% word overlap)
+        existing_words = set(re.findall(r'[a-z]+', existing_title_lower)) - {
+            'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
+            'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from',
+            'how', 'what', 'why', 'when', 'where', 'which', 'who',
+            'and', 'or', 'not', 'but', 'if', 'then', 'your', 'you',
+            'do', 'does', 'did', 'can', 'will', 'should', 'would', 'could',
+        }
+        
+        if len(existing_words) < 2:
+            continue
+        
+        overlap = title_words & existing_words
+        union = title_words | existing_words
+        overlap_ratio = len(overlap) / len(union) if union else 0
+        
+        # Check 2: Slug collision
+        existing_slug = urlparse(page_url or '').path.rstrip('/').split('/')[-1] if page_url else ''
+        slug_match = proposed_slug and existing_slug and (
+            proposed_slug == existing_slug or
+            proposed_slug in existing_slug or
+            existing_slug in proposed_slug
+        )
+        
+        if overlap_ratio >= 0.7 or slug_match:
+            severity = 'high' if overlap_ratio >= 0.85 or slug_match else 'medium'
+            conflicts.append({
+                'page_id': page_id,
+                'page_title': page_title,
+                'page_url': page_url,
+                'overlap_ratio': round(overlap_ratio, 2),
+                'shared_keywords': list(overlap)[:10],
+                'slug_collision': slug_match,
+                'severity': severity,
+            })
+    
+    if not conflicts:
+        return {'blocked': False, 'conflicts': []}
+    
+    # Block if any high severity conflict
+    has_high = any(c['severity'] == 'high' for c in conflicts)
+    
+    if has_high:
+        top_conflict = conflicts[0]
+        return {
+            'blocked': True,
+            'conflicts': conflicts,
+            'suggestion': (
+                f"This content would compete with '{top_conflict['page_title']}' "
+                f"({top_conflict['page_url']}). Consider a different angle, "
+                f"more specific topic, or merge into the existing page."
+            ),
+        }
+    
+    # Medium conflicts = warn but don't block
+    return {
+        'blocked': False,
+        'conflicts': conflicts,
+        'warning': 'Potential keyword overlap detected with existing pages. Review before publishing.',
+    }
+
+
 # Industry-standard content types by business type
 INDUSTRY_CONTENT_TEMPLATES = {
     'local_service': [
@@ -327,6 +435,18 @@ def generate_from_recommendation(request, site_id, rec_id):
     title = custom_title or recommendation['title']
     topic = custom_topic or recommendation['title']
     
+    # =========================================================================
+    # PREFLIGHT: Cannibalization check before generating content
+    # Ensures the proposed title/topic won't compete with existing pages
+    # =========================================================================
+    cannibalization_warnings = _check_content_cannibalization(site, title, topic)
+    if cannibalization_warnings.get('blocked'):
+        return Response({
+            'error': 'Content would cannibalize existing pages',
+            'conflicts': cannibalization_warnings['conflicts'],
+            'suggestion': cannibalization_warnings.get('suggestion', 'Choose a different topic or differentiate the angle.'),
+        }, status=status.HTTP_409_CONFLICT)
+    
     # Get target page if this is for a silo
     target_page_title = ''
     target_page_url = ''
@@ -425,6 +545,17 @@ def approve_content(request, site_id):
             {'error': 'title and content are required'},
             status=status.HTTP_400_BAD_REQUEST
         )
+    
+    # =========================================================================
+    # PREFLIGHT: Cannibalization check before creating the page
+    # =========================================================================
+    cannibalization_warnings = _check_content_cannibalization(site, title, title)
+    if cannibalization_warnings.get('blocked'):
+        return Response({
+            'error': 'Content would cannibalize existing pages',
+            'conflicts': cannibalization_warnings['conflicts'],
+            'suggestion': cannibalization_warnings.get('suggestion', 'Choose a different topic or differentiate the angle.'),
+        }, status=status.HTTP_409_CONFLICT)
     
     silo_id = request.data.get('silo_id')
     meta_description = request.data.get('meta_description', '')

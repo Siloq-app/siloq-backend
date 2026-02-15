@@ -144,4 +144,14 @@ urlpatterns = [
     # Lifecycle Queue
     path('lifecycle/queue/', lifecycle_queue_list_view, name='lifecycle-queue-list'),
     path('lifecycle/queue/<uuid:queue_id>/execute/', lifecycle_queue_execute_view, name='lifecycle-queue-execute'),
+    # Keyword Registry (v2 spec endpoints)
+    path('keywords/validate', _kw_validate),
+    path('keywords/assign', _kw_assign),
+    path('keywords/<uuid:pk>/reassign', _kw_reassign),
+    path('keywords', _kw_list),
+    path('keywords/bootstrap', _kw_bootstrap),
+    # Content Validation (v2 spec endpoints)
+    path('validate/preflight', _val_preflight),
+    path('validate/post-generation', _val_post_gen),
+    path('validate/batch', _val_batch),
 ]

@@ -294,6 +294,83 @@ class LinkIssue(models.Model):
         return f"{self.get_issue_type_display()}: {self.description[:50]}"
 
 
+class KeywordAssignment(models.Model):
+    """
+    Tracks which keyword belongs to which page on each site.
+    The unique_together on (keyword, site_id) is the critical constraint —
+    it prevents keyword cannibalization at the database level.
+    """
+    site = models.ForeignKey(
+        Site,
+        on_delete=models.CASCADE,
+        related_name='keyword_assignments'
+    )
+    page = models.ForeignKey(
+        'seo.Page',
+        on_delete=models.CASCADE,
+        related_name='keyword_assignments'
+    )
+    keyword = models.CharField(max_length=255, db_index=True)
+    silo_id = models.IntegerField(
+        null=True, blank=True,
+        help_text="Silo/money page this belongs to"
+    )
+    page_type = models.CharField(
+        max_length=50,
+        choices=[
+            ('hub', 'Hub/Money Page'),
+            ('spoke', 'Spoke/Supporting Page'),
+            ('product', 'Product Page'),
+            ('category', 'Category Page'),
+            ('blog', 'Blog Post'),
+            ('homepage', 'Homepage'),
+            ('general', 'General'),
+        ],
+        default='general',
+    )
+    assignment_source = models.CharField(
+        max_length=50,
+        choices=[
+            ('auto_bootstrap', 'Auto-detected during bootstrap'),
+            ('auto_analysis', 'Auto-detected during analysis'),
+            ('manual', 'Manually assigned by user'),
+            ('content_generation', 'Assigned during content generation'),
+        ],
+        default='auto_bootstrap',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('active', 'Active'),
+            ('deprecated', 'Deprecated'),
+            ('reassigned', 'Reassigned'),
+        ],
+        default='active',
+    )
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    reassigned_from_page = models.ForeignKey(
+        'seo.Page',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='reassigned_keywords',
+    )
+    reassigned_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'keyword_assignments'
+        # CRITICAL: compound unique index — database-level enforcement
+        unique_together = [('keyword', 'site_id')]
+        indexes = [
+            models.Index(fields=['site', 'status']),
+            models.Index(fields=['page', 'status']),
+            models.Index(fields=['silo_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.keyword} → {self.page.title} ({self.status})"
+
+
 class SEOData(models.Model):
     """
     SEO metrics and analysis data for a page.

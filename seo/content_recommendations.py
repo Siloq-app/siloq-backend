@@ -41,6 +41,34 @@ def _check_content_cannibalization(site, title: str, topic: str) -> dict:
     from urllib.parse import urlparse
     import re
     
+    # =========================================================================
+    # Registry gate: check the Keyword Assignment Registry first
+    # =========================================================================
+    from seo.keyword_registry import check_keyword_available, get_keyword_owner
+
+    for kw_candidate in [title.lower().strip(), topic.lower().strip()]:
+        if not check_keyword_available(site, kw_candidate):
+            owner = get_keyword_owner(site, kw_candidate)
+            if owner:
+                return {
+                    'blocked': True,
+                    'conflicts': [{
+                        'page_id': owner.page_id,
+                        'page_title': owner.page.title,
+                        'page_url': owner.page.url,
+                        'overlap_ratio': 1.0,
+                        'shared_keywords': [kw_candidate],
+                        'slug_collision': False,
+                        'severity': 'high',
+                        'registry_match': True,
+                    }],
+                    'suggestion': (
+                        f'Keyword "{kw_candidate}" is already assigned to '
+                        f'"{owner.page.title}" ({owner.page.url}) in the keyword registry. '
+                        f'Choose a different keyword or reassign via the registry.'
+                    ),
+                }
+
     existing_pages = Page.objects.filter(
         site=site, status='publish', is_noindex=False
     ).values_list('id', 'title', 'url', 'post_type')

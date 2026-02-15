@@ -102,12 +102,25 @@ class SiteViewSet(viewsets.ModelViewSet):
         else:
             health_score = 0
 
+        # Count cannibalization conflicts for health ring
+        published_pages = list(site.pages.filter(status='publish', is_noindex=False))
+        from sites.analysis import detect_cannibalization
+        conflicts = detect_cannibalization(published_pages)
+        conflicted_queries = len(conflicts)
+
+        # Adjust health score: penalize for cannibalization
+        if conflicted_queries > 0 and total_pages > 0:
+            cannibal_penalty = min(40, conflicted_queries * 5)
+            health_score = max(0, health_score - cannibal_penalty)
+
         return Response({
             'site_id': site.id,
             'site_name': site.name,
             'health_score': round(health_score, 1),
             'total_pages': total_pages,
             'total_issues': total_issues,
+            'conflicted_queries': conflicted_queries,
+            'clean_queries': max(0, total_pages - conflicted_queries),
             'last_synced_at': site.last_synced_at,
         })
 

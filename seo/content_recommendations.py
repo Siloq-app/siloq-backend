@@ -20,6 +20,7 @@ from rest_framework import status
 from sites.models import Site
 from seo.models import Page
 from seo.content_generation import generate_supporting_content
+from seo.preflight_validation import run_preflight_validation
 from ai.image_generator import generate_content_image
 
 logger = logging.getLogger(__name__)
@@ -464,16 +465,36 @@ def generate_from_recommendation(request, site_id, rec_id):
     topic = custom_topic or recommendation['title']
     
     # =========================================================================
-    # PREFLIGHT: Cannibalization check before generating content
-    # Ensures the proposed title/topic won't compete with existing pages
+    # PREFLIGHT: 9-check validation pipeline before generating content
+    # Prevents keyword cannibalization, duplicate content, and silo violations
     # =========================================================================
-    cannibalization_warnings = _check_content_cannibalization(site, title, topic)
-    if cannibalization_warnings.get('blocked'):
+    proposed_keyword = request.data.get('keyword', topic)
+    proposed_slug = request.data.get('slug')
+    proposed_h1 = request.data.get('h1', title)
+    silo_id = recommendation.get('silo_id')
+    page_type = recommendation.get('content_type', 'spoke')
+
+    preflight = run_preflight_validation(
+        site=site,
+        proposed_title=title,
+        proposed_keyword=proposed_keyword,
+        proposed_slug=proposed_slug,
+        proposed_h1=proposed_h1,
+        silo_id=silo_id,
+        page_type=page_type,
+    )
+
+    if preflight['status'] == 'block':
         return Response({
-            'error': 'Content would cannibalize existing pages',
-            'conflicts': cannibalization_warnings['conflicts'],
-            'suggestion': cannibalization_warnings.get('suggestion', 'Choose a different topic or differentiate the angle.'),
+            'error': 'Content blocked by preflight validation',
+            'blocking_check': preflight['blocking_check'],
+            'checks': preflight['checks'],
+            'warnings': preflight['warnings'],
+            'suggestion': 'Differentiate the title, keyword, or angle to avoid cannibalization.',
         }, status=status.HTTP_409_CONFLICT)
+
+    # Carry warnings forward to include in response
+    preflight_warnings = preflight['warnings'] if preflight['status'] == 'warn' else []
     
     # Get target page if this is for a silo
     target_page_title = ''
@@ -536,6 +557,8 @@ def generate_from_recommendation(request, site_id, rec_id):
         'tokens_used': result.get('tokens_used'),
         **image_data,
     }
+    if preflight_warnings:
+        response_data['preflight_warnings'] = preflight_warnings
     return Response(response_data, status=status.HTTP_201_CREATED)
 
 
